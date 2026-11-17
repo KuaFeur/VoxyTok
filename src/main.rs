@@ -585,6 +585,27 @@ async fn dispatch_loop(state: AppState) {
     }
 }
 
+fn next_video_cursor(
+    has_more: Option<bool>,
+    pages_fetched: usize,
+    current_cursor: Option<i64>,
+    next_cursor: Option<i64>,
+) -> anyhow::Result<Option<i64>> {
+    if has_more != Some(true) {
+        return Ok(None);
+    }
+    if pages_fetched >= 20 {
+        anyhow::bail!("TikTok video.list pagination exceeded the 20-page safety limit");
+    }
+    let next = next_cursor.ok_or_else(|| {
+        anyhow::anyhow!("TikTok indicated more videos but omitted the pagination cursor")
+    })?;
+    if Some(next) == current_cursor {
+        anyhow::bail!("TikTok video.list returned a repeated pagination cursor");
+    }
+    Ok(Some(next))
+}
+
 fn is_new_publication(create_time: Option<i64>, watermark: DateTime<Utc>) -> bool {
     create_time
         .and_then(|timestamp| DateTime::from_timestamp(timestamp, 0))
@@ -825,10 +846,10 @@ async fn poll_creator(state: &AppState, mut creator: PollingCreator, config: &Ti
         tx.commit().await?;
 
         }
-        if data.has_more != Some(true) || pages_fetched>=20 { break; }
-        let Some(next_cursor)=data.cursor else { break; };
-        if Some(next_cursor)==cursor { break; }
-        cursor=Some(next_cursor);
+        match next_video_cursor(data.has_more, pages_fetched, cursor, data.cursor)? {
+            Some(next_cursor) => cursor = Some(next_cursor),
+            None => break,
+        }
     }
     sqlx::query("UPDATE creators SET last_polled_at=NOW(),next_poll_at=NOW()+($2*INTERVAL '1 hour'),poll_failures=0,last_error=NULL WHERE id=$1")
         .bind(creator.id).bind(POLL_INTERVAL_HOURS).execute(&state.db).await?;
@@ -1077,6 +1098,19 @@ mod tests {
         ).bind(hash_state(&app_reference)).fetch_one(&db).await.unwrap();
         assert_eq!(deleted_connection_status,"reauthorization_required");
         db.close().await;
+    }
+
+    #[test]
+    fn pagination_stops_only_when_provider_says_no_more() {
+        assert_eq!(next_video_cursor(Some(false), 1, None, None).unwrap(), None);
+        assert_eq!(next_video_cursor(Some(true), 1, None, Some(123)).unwrap(), Some(123));
+    }
+
+    #[test]
+    fn pagination_errors_on_missing_repeated_or_excessive_cursor() {
+        assert!(next_video_cursor(Some(true), 1, None, None).is_err());
+        assert!(next_video_cursor(Some(true), 2, Some(123), Some(123)).is_err());
+        assert!(next_video_cursor(Some(true), 20, Some(123), Some(456)).is_err());
     }
 
     #[test]
