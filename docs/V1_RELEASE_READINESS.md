@@ -23,6 +23,11 @@ These cannot be completed by CI without the application's real credentials and T
 - [ ] Access-token refresh succeeds and the rotated refresh token is persisted.
 - [ ] Revoked/expired refresh credentials result in `reauthorization_required`.
 - [ ] Temporary provider errors retain the connection and use retry backoff.
+- [ ] Deleting a TikTok-linked creator revokes its access token through TikTok's official revoke endpoint before local deletion.
+- [ ] A transient revoke/refresh/network failure returns `502` and preserves the local creator so deletion can be retried.
+- [ ] Missing TikTok provider configuration returns `503` and preserves the local creator.
+- [ ] Deleting a creator whose token was already revoked/expired is idempotent and still removes the local record.
+- [ ] After deletion, the account no longer appears as connected in the TikTok app's connected-apps settings.
 
 ## Deployment and operations
 
