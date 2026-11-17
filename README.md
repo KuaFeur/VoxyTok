@@ -55,13 +55,13 @@ PostgreSQL is the durable source of truth and stores creators, subscriptions, ob
 
 ## Planned API
 
-All management endpoints use Bearer authentication.
+Implemented management endpoints use `Authorization: Bearer <API_TOKEN>`. The initial API slice supports creator registration, listing and removal. Subscription management, event inspection and delivery retry are still planned.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/v1/creators` | Register a TikTok creator |
-| `GET` | `/api/v1/creators` | List monitored creators |
-| `DELETE` | `/api/v1/creators/{id}` | Stop monitoring a creator |
+| `POST` | `/api/v1/creators` | Register a TikTok creator — implemented |
+| `GET` | `/api/v1/creators` | List monitored creators — implemented |
+| `DELETE` | `/api/v1/creators/{id}` | Remove a creator — implemented |
 | `POST` | `/api/v1/subscriptions` | Subscribe a webhook to creator events |
 | `GET` | `/api/v1/subscriptions` | List webhook subscriptions |
 | `DELETE` | `/api/v1/subscriptions/{id}` | Remove a webhook subscription |
@@ -110,7 +110,7 @@ Planned image:
 ghcr.io/kuafeur/voxytok:latest
 ```
 
-The container will bundle the Rust service and PostgreSQL, following VoxyTube's single-container deployment convention. Persist the application data directory; do not expose PostgreSQL's internal port publicly.
+The container bundles the Rust service and PostgreSQL, following VoxyTube's single-container deployment convention. Persist the application data directory; do not expose PostgreSQL's internal port publicly. Configure `API_TOKEN` with at least 32 random characters and set a strong `POSTGRES_PASSWORD`.
 
 ## Project status
 
