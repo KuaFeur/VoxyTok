@@ -58,6 +58,8 @@ paths:
                   authorization_url: { type: string, format: uri }
                   reference: { type: string }
                   expires_in_seconds: { type: integer, const: 600 }
+        "409": { description: Reference already used; generate a fresh reference }
+        "422": { description: Invalid reference format }
         "503": { description: TikTok provider is not configured }
   /api/v1/oauth/tiktok/connections/{reference}:
     get:

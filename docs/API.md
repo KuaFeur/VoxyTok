@@ -45,7 +45,7 @@ Response:
 }
 ```
 
-The application should send the URL to the creator. The creator must sign in to TikTok and approve the requested scopes. The URL expires after ten minutes.
+The application should send the URL to the creator. The creator must sign in to TikTok and approve the requested scopes. The URL expires after ten minutes. A reference already used by another OAuth attempt returns HTTP 409; generate a fresh random reference for every attempt.
 
 ### `GET /oauth/tiktok/callback`
 

@@ -330,8 +330,12 @@ async fn start_tiktok_oauth(
          VALUES ($1,$2,NOW()+INTERVAL '10 minutes')",
     ).bind(hash_state(&state_token)).bind(reference_hash).execute(&state.db).await
         .map_err(|error| {
-            tracing::error!(%error, "could not persist OAuth state");
-            StatusCode::CONFLICT
+            if error.as_database_error().is_some_and(|db| db.code().as_deref() == Some("23505")) {
+                StatusCode::CONFLICT
+            } else {
+                tracing::error!(%error, "could not persist OAuth state");
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         })?;
 
     let mut url = Url::parse(TIKTOK_AUTHORIZE_URL).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -807,6 +811,30 @@ mod tests {
         let username = format!("ci_{}", Uuid::new_v4().simple());
         sqlx::query("INSERT INTO creators (id,username) VALUES ($1,$2)")
             .bind(creator_id).bind(&username).execute(&db).await.unwrap();
+
+        // Exercise the one-time OAuth reference lifecycle against PostgreSQL.
+        let oauth_state = Uuid::new_v4().to_string();
+        let app_reference = format!("ci_{}", Uuid::new_v4().simple());
+        let reference_hash = hash_state(&app_reference);
+        sqlx::query("INSERT INTO oauth_states (state_hash,client_reference_hash,expires_at) VALUES ($1,$2,NOW()+INTERVAL '10 minutes')")
+            .bind(hash_state(&oauth_state)).bind(&reference_hash).execute(&db).await.unwrap();
+        let consumed = sqlx::query_scalar::<_,String>(
+            "UPDATE oauth_states SET consumed_at=NOW(),status='processing'
+             WHERE state_hash=$1 AND expires_at>NOW() AND consumed_at IS NULL RETURNING state_hash",
+        ).bind(hash_state(&oauth_state)).fetch_optional(&db).await.unwrap();
+        assert!(consumed.is_some());
+        let consumed_again = sqlx::query_scalar::<_,String>(
+            "UPDATE oauth_states SET consumed_at=NOW(),status='processing'
+             WHERE state_hash=$1 AND expires_at>NOW() AND consumed_at IS NULL RETURNING state_hash",
+        ).bind(hash_state(&oauth_state)).fetch_optional(&db).await.unwrap();
+        assert!(consumed_again.is_none());
+        sqlx::query("UPDATE oauth_states SET status='connected',creator_id=$2 WHERE state_hash=$1")
+            .bind(hash_state(&oauth_state)).bind(creator_id).execute(&db).await.unwrap();
+        let (connection_status, connected_creator):(String,Option<Uuid>) = sqlx::query_as(
+            "SELECT status,creator_id FROM oauth_states WHERE client_reference_hash=$1",
+        ).bind(reference_hash).fetch_one(&db).await.unwrap();
+        assert_eq!(connection_status,"connected");
+        assert_eq!(connected_creator,Some(creator_id));
 
         let video_id = Uuid::new_v4();
         let payload = json!({"event":"tiktok.video.published","video":{"id":"ci-video"}});
