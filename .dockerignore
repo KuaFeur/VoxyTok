@@ -1,0 +1,10 @@
+.git
+.github
+docs
+examples
+deploy
+target
+data
+.env
+.env.*
+node_modules
