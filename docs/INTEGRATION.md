@@ -84,3 +84,8 @@ Return a successful 2xx response only after your application has accepted the ev
 ## Discord.js example
 
 See [examples/discord.js](../examples/discord.js/) for a minimal Discord.js v14 example. The command only displays the TikTok authorization URL; the webhook receiver posts incoming videos to a configured channel. VoxyTok itself remains unaware of Discord.
+
+
+## First synchronization behavior
+
+VoxyTok starts a creator's polling immediately after authorization, but does not send the account's historical videos as new publication events. It establishes a timestamp watermark at connection time and only emits videos published after that point. Later polls use the last successful poll time with a one-second overlap; duplicate video IDs are suppressed by PostgreSQL.

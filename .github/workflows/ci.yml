@@ -53,4 +53,26 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: voxytok:ci
+
+      - name: Smoke-test embedded PostgreSQL and HTTP API
+        run: |
+          docker run -d --name voxytok-ci -p 8080:8080 \
+            -e API_TOKEN=ci_api_token_0123456789_abcdefghijklmnop \
+            -e POSTGRES_PASSWORD=ci_postgres_password_0123456789 \
+            voxytok:ci
+          for attempt in $(seq 1 60); do
+            if curl --silent --fail http://127.0.0.1:8080/readyz >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              docker logs voxytok-ci
+              exit 1
+            fi
+            sleep 2
+          done
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/api/v1/creators)" = "401"
+          curl --silent --fail -H "Authorization: Bearer ci_api_token_0123456789_abcdefghijklmnop" \
+            http://127.0.0.1:8080/api/v1/creators | grep -q '^\[\]$'
+          docker rm -f voxytok-ci

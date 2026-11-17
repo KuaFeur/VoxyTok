@@ -174,3 +174,8 @@ Headers:
 - `X-VoxyTok-Signature`: `sha256=<hex>`, when a webhook secret is configured.
 
 Verify HMAC-SHA256 over the exact raw body before JSON parsing. The delivery guarantee is at-least-once; deduplicate using the idempotency key.
+
+
+## Initial synchronization
+
+When a creator connects or reconnects, VoxyTok records a publication watermark and starts polling immediately. Existing videos published before that point are not replayed as new events. Subsequent polls use the last successful poll timestamp with a one-second overlap; database deduplication makes the overlap safe. Videos without a valid publication timestamp are ignored rather than being treated as new.

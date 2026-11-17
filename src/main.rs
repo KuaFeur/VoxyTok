@@ -585,6 +585,12 @@ async fn dispatch_loop(state: AppState) {
     }
 }
 
+fn is_new_publication(create_time: Option<i64>, watermark: DateTime<Utc>) -> bool {
+    create_time
+        .and_then(|timestamp| DateTime::from_timestamp(timestamp, 0))
+        .is_some_and(|published_at| published_at >= watermark)
+}
+
 fn parse_tiktok_user_info_response(
     status: StatusCode,
     payload: Value,
@@ -787,7 +793,7 @@ async fn poll_creator(state: &AppState, mut creator: PollingCreator, config: &Ti
         let videos=data.videos.unwrap_or_default();
         for video in videos {
         let published_at=video.create_time.and_then(|timestamp|DateTime::from_timestamp(timestamp,0));
-        if !published_at.is_some_and(|published_at| published_at >= poll_watermark) {
+        if !is_new_publication(video.create_time, poll_watermark) {
             continue;
         }
         let payload=json!({
@@ -1076,19 +1082,15 @@ mod tests {
     #[test]
     fn first_sync_watermark_skips_historical_publications() {
         let connected_at = Utc::now();
-        let cutoff = connected_at - ChronoDuration::seconds(1);
+        let watermark = connected_at - ChronoDuration::seconds(1);
         let old_video = (connected_at - ChronoDuration::seconds(5)).timestamp();
         let overlapping_video = (connected_at - ChronoDuration::milliseconds(500)).timestamp();
         let new_video = (connected_at + ChronoDuration::seconds(5)).timestamp();
 
-        let old_published = DateTime::from_timestamp(old_video, 0).unwrap();
-        let overlap_published = DateTime::from_timestamp(overlapping_video, 0).unwrap();
-        let new_published = DateTime::from_timestamp(new_video, 0).unwrap();
-
-        assert!(old_published < cutoff);
-        assert!(overlap_published >= cutoff);
-        assert!(new_published >= cutoff);
-        assert!(DateTime::from_timestamp(old_video, 0).is_some());
+        assert!(!is_new_publication(Some(old_video), watermark));
+        assert!(is_new_publication(Some(overlapping_video), watermark));
+        assert!(is_new_publication(Some(new_video), watermark));
+        assert!(!is_new_publication(None, watermark));
     }
 
     #[test]
