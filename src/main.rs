@@ -112,7 +112,6 @@ struct TikTokTokenResponse {
     refresh_expires_in: i64,
     open_id: String,
     scope: String,
-    token_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -166,7 +165,6 @@ struct PollingCreator {
     id: Uuid,
     username: String,
     display_name: Option<String>,
-    open_id: String,
     access_token_enc: String,
     refresh_token_enc: String,
     access_expires_at: DateTime<Utc>,
@@ -357,7 +355,7 @@ async fn tiktok_callback(
             access_token_enc=EXCLUDED.access_token_enc, refresh_token_enc=EXCLUDED.refresh_token_enc,
             access_expires_at=EXCLUDED.access_expires_at, refresh_expires_at=EXCLUDED.refresh_expires_at,
             enabled=TRUE, last_polled_at=NULL",
-    ).bind(Uuid::new_v4()).bind(username).bind(profile.display_name)
+    ).bind(Uuid::new_v4()).bind(username).bind(profile.display_name.clone())
         .bind(profile.open_id).bind(access_enc).bind(refresh_enc)
         .bind(access_expiry).bind(refresh_expiry).execute(&state.db).await
         .map_err(|error| { tracing::error!(%error, "could not store authorized TikTok creator"); StatusCode::INTERNAL_SERVER_ERROR })?;
@@ -563,7 +561,7 @@ async fn tiktok_poll_loop(state: AppState) {
     };
     loop {
         let creators=sqlx::query_as::<_,PollingCreator>(
-            "SELECT id,username,display_name,tiktok_open_id AS open_id,access_token_enc,refresh_token_enc,
+            "SELECT id,username,display_name,access_token_enc,refresh_token_enc,
              access_expires_at,refresh_expires_at FROM creators
              WHERE enabled=TRUE AND tiktok_open_id IS NOT NULL
              AND (last_polled_at IS NULL OR last_polled_at<=NOW()-INTERVAL '12 hours')
@@ -658,6 +656,49 @@ mod tests {
         assert_ne!(encrypted,"example-secret-token");
         assert_eq!(decrypt_token(&key,&encrypted).unwrap(),"example-secret-token");
         assert!(decrypt_token(&[8_u8;32],&encrypted).is_err());
+    }
+
+
+    #[tokio::test]
+    async fn postgres_publication_outbox_is_idempotent() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            // Local unit-test runs do not need a database. CI supplies a real
+            // PostgreSQL service and therefore executes this integration test.
+            return;
+        };
+        let db = PgPoolOptions::new().max_connections(2).connect(&database_url).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0001_initial.sql")).execute(&db).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0002_single_instance_outbox.sql")).execute(&db).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0003_tiktok_oauth.sql")).execute(&db).await.unwrap();
+
+        let creator_id = Uuid::new_v4();
+        let username = format!("ci_{}", Uuid::new_v4().simple());
+        sqlx::query("INSERT INTO creators (id,username) VALUES ($1,$2)")
+            .bind(creator_id).bind(&username).execute(&db).await.unwrap();
+
+        let video_id = Uuid::new_v4();
+        let payload = json!({"event":"tiktok.video.published","video":{"id":"ci-video"}});
+        let first = sqlx::query_scalar::<_,Uuid>(
+            "INSERT INTO videos (id,creator_id,platform_video_id,payload)
+             VALUES ($1,$2,'ci-video',$3)
+             ON CONFLICT (creator_id,platform_video_id) DO NOTHING RETURNING id",
+        ).bind(video_id).bind(creator_id).bind(&payload).fetch_optional(&db).await.unwrap();
+        assert_eq!(first,Some(video_id));
+
+        let duplicate = sqlx::query_scalar::<_,Uuid>(
+            "INSERT INTO videos (id,creator_id,platform_video_id,payload)
+             VALUES ($1,$2,'ci-video',$3)
+             ON CONFLICT (creator_id,platform_video_id) DO NOTHING RETURNING id",
+        ).bind(Uuid::new_v4()).bind(creator_id).bind(&payload).fetch_optional(&db).await.unwrap();
+        assert!(duplicate.is_none());
+
+        sqlx::query("INSERT INTO deliveries (id,video_id) VALUES ($1,$2)")
+            .bind(Uuid::new_v4()).bind(video_id).execute(&db).await.unwrap();
+        let delivery_count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM deliveries WHERE video_id=$1")
+            .bind(video_id).fetch_one(&db).await.unwrap();
+        assert_eq!(delivery_count,1);
+        sqlx::query("DELETE FROM creators WHERE id=$1").bind(creator_id).execute(&db).await.unwrap();
+        db.close().await;
     }
 
     #[test]
