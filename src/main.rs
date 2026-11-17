@@ -798,7 +798,7 @@ async fn poll_creator(state: &AppState, mut creator: PollingCreator, config: &Ti
     // whose provider timestamp has second-level precision; the DB unique key
     // makes that overlap safe.
     let poll_watermark = creator.last_polled_at.unwrap_or_else(Utc::now)
-        - ChronoDuration::seconds(1);
+        - ChronoDuration::seconds(2);
     let mut inserted_count=0usize;
     let mut cursor: Option<i64>=None;
     let mut pages_fetched=0usize;
@@ -1131,7 +1131,7 @@ mod tests {
     #[test]
     fn first_sync_watermark_skips_historical_publications() {
         let connected_at = Utc::now();
-        let watermark = connected_at - ChronoDuration::seconds(1);
+        let watermark = connected_at - ChronoDuration::seconds(2);
         let old_video = (connected_at - ChronoDuration::seconds(5)).timestamp();
         let overlapping_video = (connected_at - ChronoDuration::milliseconds(500)).timestamp();
         let new_video = (connected_at + ChronoDuration::seconds(5)).timestamp();

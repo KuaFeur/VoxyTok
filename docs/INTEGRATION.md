@@ -88,4 +88,4 @@ See [examples/discord.js](../examples/discord.js/) for a minimal Discord.js v14 
 
 ## First synchronization behavior
 
-VoxyTok starts a creator's polling immediately after authorization, but does not send the account's historical videos as new publication events. It establishes a timestamp watermark at connection time and only emits videos published after that point. Later polls use the last successful poll time with a one-second overlap; duplicate video IDs are suppressed by PostgreSQL.
+VoxyTok starts a creator's polling immediately after authorization, but does not send the account's historical videos as new publication events. It establishes a timestamp watermark at connection time and only emits videos published after that point. Later polls use the last successful poll time with a two-second overlap; duplicate video IDs are suppressed by PostgreSQL.
