@@ -976,19 +976,19 @@ mod tests {
             "data": null,
             "error": {"code": "access_token_invalid", "message": "token rejected"}
         });
-        let error = parse_video_page_response(StatusCode::OK, invalid_nested).unwrap_err();
+        let error = parse_video_page_response(StatusCode::OK, invalid_nested).err().unwrap();
         assert!(error.to_string().starts_with("invalid_access_token:"));
 
         let unauthorized = parse_video_page_response(
             StatusCode::UNAUTHORIZED,
             json!({"error": {"code": "unknown", "message": "unauthorized"}}),
-        ).unwrap_err();
+        ).err().unwrap();
         assert!(unauthorized.to_string().starts_with("invalid_access_token:"));
 
         let transient = parse_video_page_response(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({"error": {"code": "server_error", "message": "try later"}}),
-        ).unwrap_err();
+        ).err().unwrap();
         assert!(!transient.to_string().starts_with("invalid_access_token:"));
 
         let success = parse_video_page_response(
