@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, FromRow, PgPool};
-use std::{env, net::SocketAddr, time::Duration};
+use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 use subtle::ConstantTimeEq;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -44,6 +44,7 @@ struct AppState {
     webhook_secret: Option<String>,
     tiktok: Option<TikTokConfig>,
     http: Client,
+    token_refresh_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Serialize)]
@@ -503,8 +504,8 @@ async fn complete_tiktok_authorization(
     let refresh_enc = encrypt_token(&config.encryption_key, &token.refresh_token)
         .map_err(|error| { tracing::error!(%error, "token encryption failed"); StatusCode::INTERNAL_SERVER_ERROR })?;
     let username = format!("tt_{}", profile.open_id.replace('-', ""));
-    let access_expiry = Utc::now() + ChronoDuration::seconds(token.expires_in.max(60));
-    let refresh_expiry = Utc::now() + ChronoDuration::seconds(token.refresh_expires_in.max(60));
+    let access_expiry = Utc::now() + ChronoDuration::seconds(token.expires_in);
+    let refresh_expiry = Utc::now() + ChronoDuration::seconds(token.refresh_expires_in);
     let creator_id = sqlx::query_scalar::<_,Uuid>(
         "INSERT INTO creators
             (id,username,display_name,tiktok_open_id,access_token_enc,refresh_token_enc,
@@ -837,6 +838,10 @@ fn apply_refreshed_credentials(
 }
 
 async fn refresh_creator_token(state: &AppState, creator: &mut PollingCreator, config: &TikTokConfig) -> anyhow::Result<String> {
+    // TikTok rotates refresh tokens on every successful refresh. Serialize all
+    // refreshes in this single-instance process to prevent concurrent callers
+    // from invalidating one another's freshly rotated credentials.
+    let _refresh_guard = state.token_refresh_lock.lock().await;
     let refresh_token=decrypt_token(&config.encryption_key,&creator.refresh_token_enc)?;
     let response=state.http.post(TIKTOK_TOKEN_URL)
         .form(&[
@@ -850,8 +855,8 @@ async fn refresh_creator_token(state: &AppState, creator: &mut PollingCreator, c
     let response=parse_tiktok_token_response(status,body)?;
     let access_enc=encrypt_token(&config.encryption_key,&response.access_token)?;
     let refresh_enc=encrypt_token(&config.encryption_key,&response.refresh_token)?;
-    let access_expires_at=Utc::now()+ChronoDuration::seconds(response.expires_in.max(60));
-    let refresh_expires_at=Utc::now()+ChronoDuration::seconds(response.refresh_expires_in.max(60));
+    let access_expires_at=Utc::now()+ChronoDuration::seconds(response.expires_in);
+    let refresh_expires_at=Utc::now()+ChronoDuration::seconds(response.refresh_expires_in);
     sqlx::query("UPDATE creators SET access_token_enc=$2,refresh_token_enc=$3,access_expires_at=$4,refresh_expires_at=$5 WHERE id=$1")
         .bind(creator.id).bind(&access_enc).bind(&refresh_enc)
         .bind(access_expires_at).bind(refresh_expires_at)
@@ -1060,7 +1065,10 @@ async fn main() -> anyhow::Result<()> {
         .redirect(reqwest::redirect::Policy::none())
         .user_agent("VoxyTok/0.3 (+https://github.com/KuaFeur/VoxyTok)")
         .build()?;
-    let state=AppState{db,api_token,webhook_url,webhook_secret,tiktok,http};
+    let state=AppState{
+        db,api_token,webhook_url,webhook_secret,tiktok,http,
+        token_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+    };
     tokio::spawn(dispatch_loop(state.clone()));
     tokio::spawn(tiktok_poll_loop(state.clone()));
 
