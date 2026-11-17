@@ -432,6 +432,9 @@ async fn main() -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!("../migrations/0001_initial.sql"))
         .execute(&db)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/0002_single_instance_outbox.sql"))
+        .execute(&db)
+        .await?;
 
     let webhook_url = env::var("WEBHOOK_URL").ok().filter(|value| !value.trim().is_empty());
     if let Some(url) = &webhook_url {
