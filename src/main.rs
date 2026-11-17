@@ -645,7 +645,7 @@ fn is_reauthorization_required(error: &anyhow::Error) -> bool {
     error.to_string().starts_with("reauthorization_required:")
 }
 
-async fn refresh_creator_token(state: &AppState, creator: &PollingCreator, config: &TikTokConfig) -> anyhow::Result<String> {
+async fn refresh_creator_token(state: &AppState, creator: &mut PollingCreator, config: &TikTokConfig) -> anyhow::Result<String> {
     let refresh_token=decrypt_token(&config.encryption_key,&creator.refresh_token_enc)?;
     let response=state.http.post(TIKTOK_TOKEN_URL)
         .form(&[
@@ -673,22 +673,29 @@ async fn refresh_creator_token(state: &AppState, creator: &PollingCreator, confi
     let response: TikTokTokenResponse=serde_json::from_value(body)?;
     let access_enc=encrypt_token(&config.encryption_key,&response.access_token)?;
     let refresh_enc=encrypt_token(&config.encryption_key,&response.refresh_token)?;
+    let access_expires_at=Utc::now()+ChronoDuration::seconds(response.expires_in.max(60));
+    let refresh_expires_at=Utc::now()+ChronoDuration::seconds(response.refresh_expires_in.max(60));
     sqlx::query("UPDATE creators SET access_token_enc=$2,refresh_token_enc=$3,access_expires_at=$4,refresh_expires_at=$5 WHERE id=$1")
-        .bind(creator.id).bind(access_enc).bind(refresh_enc)
-        .bind(Utc::now()+ChronoDuration::seconds(response.expires_in.max(60)))
-        .bind(Utc::now()+ChronoDuration::seconds(response.refresh_expires_in.max(60)))
+        .bind(creator.id).bind(&access_enc).bind(&refresh_enc)
+        .bind(access_expires_at).bind(refresh_expires_at)
         .execute(&state.db).await?;
+    // Keep the in-memory copy in sync: a second refresh in this same poll
+    // must use TikTok's rotated refresh token, never the now-stale one.
+    creator.access_token_enc=access_enc;
+    creator.refresh_token_enc=refresh_enc;
+    creator.access_expires_at=access_expires_at;
+    creator.refresh_expires_at=refresh_expires_at;
     Ok(response.access_token)
 }
 
-async fn poll_creator(state: &AppState, creator: PollingCreator, config: &TikTokConfig) -> anyhow::Result<()> {
+async fn poll_creator(state: &AppState, mut creator: PollingCreator, config: &TikTokConfig) -> anyhow::Result<()> {
     let mut access_token=if creator.access_expires_at<=Utc::now()+ChronoDuration::minutes(10) {
         if creator.refresh_expires_at<=Utc::now() {
             sqlx::query("UPDATE creators SET enabled=FALSE,next_poll_at=NULL,last_error='TikTok refresh token expired; creator must reconnect' WHERE id=$1")
                 .bind(creator.id).execute(&state.db).await?;
             anyhow::bail!("reauthorization_required: TikTok refresh token expired");
         }
-        refresh_creator_token(state,&creator,config).await?
+        refresh_creator_token(state,&mut creator,config).await?
     } else {
         decrypt_token(&config.encryption_key,&creator.access_token_enc)?
     };
