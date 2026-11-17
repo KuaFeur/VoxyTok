@@ -9,7 +9,7 @@ VoxyTok is a webhook service, not a Discord plugin. It does not need to know whi
 3. Your application sends the returned `authorization_url` to the person who wants to connect TikTok.
 4. TikTok redirects the browser to VoxyTok's registered callback.
 5. VoxyTok validates OAuth state, stores encrypted tokens and binds the connected creator ID to the reference digest.
-6. Your backend polls `GET /api/v1/oauth/tiktok/connections/{reference}` until it receives `status: connected`.
+6. Your backend polls `GET /api/v1/oauth/tiktok/connections/{reference}` until it receives `status: connected`. Stop polling on `failed` or `expired`; if it receives `reauthorization_required`, ask the creator to run the connection flow again with a fresh reference.
 7. VoxyTok polls the official Display API and sends new publication events to the single webhook configured for this instance.
 8. Your application verifies the signature, deduplicates the delivery and performs its own action.
 
@@ -45,6 +45,7 @@ const statusResponse = await fetch(
 );
 const connection = await statusResponse.json();
 // When connected, map connection.creator_id to your own local user ID.
+// Stop on failed/expired; reauthorization_required means the creator must reconnect.
 ```
 
 ## Verify webhook signatures
