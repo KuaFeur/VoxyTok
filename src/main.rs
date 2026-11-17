@@ -526,7 +526,8 @@ async fn list_events(State(state): State<AppState>) -> Result<Json<Vec<Value>>, 
 
 async fn retry_delivery(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<StatusCode, StatusCode> {
     let result = sqlx::query(
-        "UPDATE deliveries SET status='retry',next_attempt_at=NOW(),last_error=NULL
+        "UPDATE deliveries SET status='retry',next_attempt_at=NOW(),attempts=0,
+         last_error=NULL,processing_started_at=NULL
          WHERE id=$1 AND status IN ('failed','retry')",
     ).bind(id).execute(&state.db).await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -1115,6 +1116,24 @@ mod tests {
         ).bind(delivery_id).fetch_one(&db).await.unwrap();
         assert_eq!(delivery_status, "processing");
         assert_eq!(delivery_attempts, 1);
+
+        // A manual retry starts a fresh attempt budget after terminal failure.
+        sqlx::query(
+            "UPDATE deliveries SET status='failed',attempts=10,processing_started_at=NULL WHERE id=$1",
+        ).bind(delivery_id).execute(&db).await.unwrap();
+        let retried = sqlx::query(
+            "UPDATE deliveries SET status='retry',next_attempt_at=NOW(),attempts=0,
+             last_error=NULL,processing_started_at=NULL
+             WHERE id=$1 AND status IN ('failed','retry')",
+        ).bind(delivery_id).execute(&db).await.unwrap();
+        assert_eq!(retried.rows_affected(), 1);
+        let retry_attempts: i32 = sqlx::query_scalar(
+            "SELECT attempts FROM deliveries WHERE id=$1",
+        ).bind(delivery_id).fetch_one(&db).await.unwrap();
+        assert_eq!(retry_attempts, 0);
+        let manually_reclaimed = claim_delivery(&db).await.unwrap().unwrap();
+        assert_eq!(manually_reclaimed.id, delivery_id);
+        assert_eq!(manually_reclaimed.attempts, 1);
         sqlx::query("DELETE FROM creators WHERE id=$1").bind(creator_id).execute(&db).await.unwrap();
         let deleted_connection_status: String = sqlx::query_scalar(
             "SELECT CASE
