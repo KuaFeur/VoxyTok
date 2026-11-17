@@ -61,6 +61,7 @@ The provider polls periodically (currently every 12 hours); this is not an insta
 - AES-256-GCM encryption for access and refresh tokens at rest.
 - Single-use, expiring OAuth state.
 - Automatic refresh-token rotation, with permanent revocation detection and an explicit reauthorization state.
+- Official TikTok token revocation when deleting a connected creator; transient failures preserve local data for retry.
 - Scheduled video polling with bounded pagination; the first connection does not replay the existing back catalogue.
 - Persistent exponential backoff after transient provider errors; revoked credentials are disabled until the creator reconnects.
 - PostgreSQL deduplication and durable delivery outbox.

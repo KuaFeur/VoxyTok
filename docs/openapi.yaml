@@ -154,6 +154,8 @@ paths:
       responses:
         "204": { description: Creator deleted }
         "404": { description: Creator not found }
+        "502": { description: "TikTok token revocation failed; creator data was retained" }
+        "503": { description: "TikTok credentials are required to revoke this creator" }
   /api/v1/events:
     get:
       summary: List recent events and delivery states

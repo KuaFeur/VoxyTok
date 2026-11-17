@@ -103,7 +103,7 @@ Request:
 
 ### `DELETE /api/v1/creators/{id}`
 
-For TikTok-authorized creators, first revokes the access token through TikTok's official OAuth revoke endpoint, then deletes the creator and related videos/deliveries through database foreign-key cascades. If revocation fails transiently, returns HTTP 502 and keeps the creator so the operation can be retried. Use this to stop monitoring and remove stored data.
+For TikTok-authorized creators, first revokes the access token through TikTok's official OAuth revoke endpoint, then deletes the creator and related videos/deliveries through database foreign-key cascades. If revocation fails transiently, returns HTTP 502 and keeps the creator so the operation can be retried. If the TikTok configuration is missing, returns HTTP 503 and retains the creator. Use this to stop monitoring and remove stored data.
 
 ## Events
 
