@@ -586,6 +586,35 @@ async fn dispatch_loop(state: AppState) {
     }
 }
 
+fn parse_tiktok_token_response(
+    status: StatusCode,
+    payload: Value,
+) -> anyhow::Result<TikTokTokenResponse> {
+    let code = provider_error_code(&payload).unwrap_or("unknown");
+    if !status.is_success() {
+        if is_permanent_tiktok_auth_error(code) {
+            anyhow::bail!("reauthorization_required: TikTok rejected the refresh token ({code})");
+        }
+        anyhow::bail!("TikTok token refresh failed with HTTP {status} (provider code: {code})");
+    }
+    if !code.is_empty() && code != "unknown" && code != "ok" {
+        if is_permanent_tiktok_auth_error(code) {
+            anyhow::bail!("reauthorization_required: TikTok rejected the refresh token ({code})");
+        }
+        anyhow::bail!("TikTok token refresh failed (provider code: {code})");
+    }
+    let token: TikTokTokenResponse = serde_json::from_value(payload)?;
+    if token.access_token.is_empty()
+        || token.refresh_token.is_empty()
+        || token.open_id.is_empty()
+        || token.expires_in <= 0
+        || token.refresh_expires_in <= 0
+    {
+        anyhow::bail!("TikTok token refresh returned incomplete or invalid credentials");
+    }
+    Ok(token)
+}
+
 fn is_permanent_tiktok_auth_error(code: &str) -> bool {
     matches!(code, "invalid_grant" | "invalid_token" | "token_expired" | "user_not_authorized")
 }
@@ -672,21 +701,7 @@ async fn refresh_creator_token(state: &AppState, creator: &mut PollingCreator, c
         ]).send().await?;
     let status=response.status();
     let body: Value=response.json().await?;
-    if !status.is_success() {
-        let code=body.get("error").and_then(Value::as_str).unwrap_or("unknown");
-        if is_permanent_tiktok_auth_error(code) {
-            anyhow::bail!("reauthorization_required: TikTok rejected the refresh token ({code})");
-        }
-        anyhow::bail!("TikTok token refresh failed with HTTP {status} (provider code: {code})");
-    }
-    if let Some(code)=body.get("error").and_then(Value::as_str)
-        && !code.is_empty() && code!="ok" {
-        if is_permanent_tiktok_auth_error(code) {
-            anyhow::bail!("reauthorization_required: TikTok rejected the refresh token ({code})");
-        }
-        anyhow::bail!("TikTok token refresh failed (provider code: {code})");
-    }
-    let response: TikTokTokenResponse=serde_json::from_value(body)?;
+    let response=parse_tiktok_token_response(status,body)?;
     let access_enc=encrypt_token(&config.encryption_key,&response.access_token)?;
     let refresh_enc=encrypt_token(&config.encryption_key,&response.refresh_token)?;
     let access_expires_at=Utc::now()+ChronoDuration::seconds(response.expires_in.max(60));
@@ -1025,6 +1040,63 @@ mod tests {
         ).bind(hash_state(&app_reference)).fetch_one(&db).await.unwrap();
         assert_eq!(deleted_connection_status,"reauthorization_required");
         db.close().await;
+    }
+
+    #[test]
+    fn token_refresh_parser_accepts_rotated_credentials() {
+        let token = parse_tiktok_token_response(
+            StatusCode::OK,
+            json!({
+                "access_token": "new-access",
+                "expires_in": 7200,
+                "refresh_token": "new-rotated-refresh",
+                "refresh_expires_in": 15552000,
+                "open_id": "creator-open-id",
+                "scope": "user.info.basic,video.list",
+                "token_type": "Bearer"
+            }),
+        ).unwrap();
+        assert_eq!(token.access_token, "new-access");
+        assert_eq!(token.refresh_token, "new-rotated-refresh");
+        assert_eq!(token.refresh_expires_in, 15552000);
+    }
+
+    #[test]
+    fn token_refresh_parser_classifies_revocation_and_transient_failures() {
+        let revoked = parse_tiktok_token_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "invalid_grant", "error_description": "refresh token revoked"}),
+        ).err().unwrap();
+        assert!(is_reauthorization_required(&revoked));
+
+        let nested_revoked = parse_tiktok_token_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": {"code": "invalid_grant", "message": "revoked"}}),
+        ).err().unwrap();
+        assert!(is_reauthorization_required(&nested_revoked));
+
+        let transient = parse_tiktok_token_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": "server_error"}),
+        ).err().unwrap();
+        assert!(!is_reauthorization_required(&transient));
+        assert!(transient.to_string().contains("503"));
+    }
+
+    #[test]
+    fn token_refresh_parser_rejects_incomplete_success_responses() {
+        let malformed = parse_tiktok_token_response(
+            StatusCode::OK,
+            json!({
+                "access_token": "new-access",
+                "expires_in": 7200,
+                "refresh_token": "",
+                "refresh_expires_in": 15552000,
+                "open_id": "creator-open-id",
+                "scope": "user.info.basic,video.list"
+            }),
+        );
+        assert!(malformed.is_err());
     }
 
     #[test]
