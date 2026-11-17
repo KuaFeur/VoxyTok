@@ -1,0 +1,89 @@
+{
+  "_comment": "VoxyTok - single-container Rust service with embedded PostgreSQL",
+  "meta": { "version": "PTDL_v2", "update_url": null },
+  "exported_at": "2026-11-17T00:00:00+00:00",
+  "name": "VoxyTok",
+  "author": "Kua <https://github.com/KuaFeur>",
+  "description": "TikTok publication event gateway. Rust and PostgreSQL are bundled in one container.",
+  "features": null,
+  "docker_images": {
+    "ghcr.io/kuafeur/voxytok:latest": "ghcr.io/kuafeur/voxytok:latest"
+  },
+  "file_denylist": [],
+  "startup": "/usr/local/bin/voxytok-entrypoint",
+  "config": {
+    "files": "{}",
+    "startup": "{\"done\":\"VoxyTok HTTP server started\"}",
+    "logs": "{}",
+    "stop": "^C"
+  },
+  "scripts": {
+    "installation": {
+      "script": "#!/bin/bash\n# Runtime image includes the application and PostgreSQL.\nexit 0",
+      "container": "debian:bookworm-slim",
+      "entrypoint": "bash"
+    }
+  },
+  "variables": [
+    {
+      "name": "HTTP Port",
+      "description": "Internal HTTP listen port. Allocate and expose this port in Pelican.",
+      "env_variable": "PORT",
+      "default_value": "8080",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|between:1,65535",
+      "field_type": "text"
+    },
+    {
+      "name": "Rust Log Level",
+      "description": "Tracing filter, for example voxytok=info.",
+      "env_variable": "RUST_LOG",
+      "default_value": "voxytok=info",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:255",
+      "field_type": "text"
+    },
+    {
+      "name": "PostgreSQL Database",
+      "description": "Local database name inside the container.",
+      "env_variable": "POSTGRES_DB",
+      "default_value": "voxytok",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|alpha_dash|max:63",
+      "field_type": "text"
+    },
+    {
+      "name": "PostgreSQL User",
+      "description": "Local database user.",
+      "env_variable": "POSTGRES_USER",
+      "default_value": "voxytok",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|alpha_dash|max:63",
+      "field_type": "text"
+    },
+    {
+      "name": "PostgreSQL Password",
+      "description": "Set a strong password. PostgreSQL is bound to localhost only.",
+      "env_variable": "POSTGRES_PASSWORD",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|min:24|max:128",
+      "field_type": "password"
+    },
+    {
+      "name": "PostgreSQL Port",
+      "description": "Internal PostgreSQL port. Do not allocate or expose this port publicly.",
+      "env_variable": "POSTGRES_PORT",
+      "default_value": "5432",
+      "user_viewable": false,
+      "user_editable": false,
+      "rules": "required|integer|between:1,65535",
+      "field_type": "text"
+    }
+  ]
+}
