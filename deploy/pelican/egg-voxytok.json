@@ -10,7 +10,7 @@
   "description": "Official TikTok Display API gateway. Each creator explicitly authorizes this one bot instance. PostgreSQL is bundled.",
   "features": null,
   "docker_images": {
-    "ghcr.io/kuafeur/voxytok:edge": "ghcr.io/kuafeur/voxytok:edge"
+    "ghcr.io/kuafeur/voxytok:latest": "ghcr.io/kuafeur/voxytok:latest"
   },
   "file_denylist": [],
   "startup": "/usr/local/bin/voxytok-entrypoint",
