@@ -594,21 +594,20 @@ fn is_invalid_access_token_code(code: &str) -> bool {
     matches!(code, "invalid_token" | "token_expired" | "access_token_invalid" | "access_token_expired")
 }
 
-async fn request_video_page(
-    state: &AppState,
-    access_token: &str,
-    body: &Value,
+fn provider_error_code(payload: &Value) -> Option<&str> {
+    match payload.get("error") {
+        Some(Value::String(code)) => Some(code.as_str()),
+        Some(Value::Object(error)) => error.get("code").and_then(Value::as_str),
+        _ => None,
+    }
+}
+
+fn parse_video_page_response(
+    status: StatusCode,
+    payload: Value,
 ) -> anyhow::Result<TikTokVideoListResponse> {
-    let response = state.http.post(TIKTOK_VIDEO_LIST_URL)
-        .query(&[("fields", "id,title,video_description,create_time,duration,cover_image_url,share_url,embed_link")])
-        .bearer_auth(access_token)
-        .json(body)
-        .send()
-        .await?;
-    let status = response.status();
-    let payload: Value = response.json().await?;
+    let code = provider_error_code(&payload).unwrap_or("unknown");
     if !status.is_success() {
-        let code = payload.get("error").and_then(Value::as_str).unwrap_or("unknown");
         if is_invalid_access_token_code(code) || status == StatusCode::UNAUTHORIZED {
             anyhow::bail!("invalid_access_token: TikTok rejected the access token (HTTP {status}, code {code})");
         }
@@ -624,6 +623,22 @@ async fn request_video_page(
         anyhow::bail!("TikTok video.list API error ({code}): {}", api_error.message.as_deref().unwrap_or_default());
     }
     Ok(parsed)
+}
+
+async fn request_video_page(
+    state: &AppState,
+    access_token: &str,
+    body: &Value,
+) -> anyhow::Result<TikTokVideoListResponse> {
+    let response = state.http.post(TIKTOK_VIDEO_LIST_URL)
+        .query(&[("fields", "id,title,video_description,create_time,duration,cover_image_url,share_url,embed_link")])
+        .bearer_auth(access_token)
+        .json(body)
+        .send()
+        .await?;
+    let status = response.status();
+    let payload: Value = response.json().await?;
+    parse_video_page_response(status, payload)
 }
 
 fn is_reauthorization_required(error: &anyhow::Error) -> bool {
@@ -953,6 +968,34 @@ mod tests {
         ).bind(hash_state(&app_reference)).fetch_one(&db).await.unwrap();
         assert_eq!(deleted_connection_status,"reauthorization_required");
         db.close().await;
+    }
+
+    #[test]
+    fn video_page_parser_distinguishes_auth_and_transient_errors() {
+        let invalid_nested = json!({
+            "data": null,
+            "error": {"code": "access_token_invalid", "message": "token rejected"}
+        });
+        let error = parse_video_page_response(StatusCode::OK, invalid_nested).unwrap_err();
+        assert!(error.to_string().starts_with("invalid_access_token:"));
+
+        let unauthorized = parse_video_page_response(
+            StatusCode::UNAUTHORIZED,
+            json!({"error": {"code": "unknown", "message": "unauthorized"}}),
+        ).unwrap_err();
+        assert!(unauthorized.to_string().starts_with("invalid_access_token:"));
+
+        let transient = parse_video_page_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": {"code": "server_error", "message": "try later"}}),
+        ).unwrap_err();
+        assert!(!transient.to_string().starts_with("invalid_access_token:"));
+
+        let success = parse_video_page_response(
+            StatusCode::OK,
+            json!({"data": {"videos": [], "has_more": false}, "error": {"code": "ok"}}),
+        ).unwrap();
+        assert!(success.data.is_some());
     }
 
     #[test]
