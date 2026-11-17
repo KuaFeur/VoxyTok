@@ -330,10 +330,13 @@ async fn delete_creator(
         .map_err(|error| { tracing::error!(%error, "could not load TikTok credentials for revocation"); StatusCode::INTERNAL_SERVER_ERROR })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
+    // Hold the refresh lock through revocation so a concurrent poll cannot
+    // rotate the token between selecting it and revoking it.
+    let _refresh_guard = state.token_refresh_lock.lock().await;
     let access_token = if creator.access_expires_at <= Utc::now()
         && creator.refresh_expires_at > Utc::now()
     {
-        match refresh_creator_token(&state, &mut creator, config).await {
+        match refresh_creator_token_locked(&state, &mut creator, config).await {
             Ok(token) => token,
             Err(error) if is_reauthorization_required(&error) => {
                 tracing::info!(creator=%creator.username, "TikTok credentials were already revoked or expired");
@@ -838,10 +841,13 @@ fn apply_refreshed_credentials(
 }
 
 async fn refresh_creator_token(state: &AppState, creator: &mut PollingCreator, config: &TikTokConfig) -> anyhow::Result<String> {
-    // TikTok rotates refresh tokens on every successful refresh. Serialize all
-    // refreshes in this single-instance process to prevent concurrent callers
-    // from invalidating one another's freshly rotated credentials.
     let _refresh_guard = state.token_refresh_lock.lock().await;
+    refresh_creator_token_locked(state, creator, config).await
+}
+
+async fn refresh_creator_token_locked(state: &AppState, creator: &mut PollingCreator, config: &TikTokConfig) -> anyhow::Result<String> {
+    // Caller holds token_refresh_lock. TikTok rotates refresh tokens on every
+    // successful refresh, so reload credentials after acquiring the lock.
     let current = sqlx::query_as::<_, (String, String, DateTime<Utc>, DateTime<Utc>)>(
         "SELECT access_token_enc,refresh_token_enc,access_expires_at,refresh_expires_at
          FROM creators WHERE id=$1",
