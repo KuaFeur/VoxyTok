@@ -4,7 +4,7 @@
 
 ### TikTok publications. Delivered to your bot.
 
-A self-hosted TikTok event gateway written in Rust. VoxyTok monitors public creator profiles and sends normalized publication events to the webhook of the bot/application attached to that instance.
+A self-hosted TikTok event gateway written in Rust. VoxyTok monitors TikTok accounts that explicitly authorize the instance through TikTok Login Kit and sends normalized publication events to the webhook of the bot/application attached to that instance.
 
 [![Rust](https://img.shields.io/badge/built%20with-Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Docker](https://img.shields.io/badge/container-GHCR-2496ED?logo=docker)](https://github.com/KuaFeur/VoxyTok/pkgs/container/voxytok)
@@ -62,7 +62,7 @@ All management endpoints require `Authorization: Bearer <API_TOKEN>`.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/v1/creators` | Add a TikTok creator to this bot's watch list |
+| `POST` | `/api/v1/oauth/tiktok/start` | Generate a one-time TikTok authorization URL |\n| `GET` | `/oauth/tiktok/callback` | Complete TikTok Login Kit authorization |\n| `POST` | `/api/v1/creators` | Add an unconnected local creator record (not polled until OAuth) |
 | `GET` | `/api/v1/creators` | List this instance's creators |
 | `DELETE` | `/api/v1/creators/{id}` | Stop monitoring and remove a creator |
 | `POST` | `/api/v1/events` | Ingest a normalized publication event |
@@ -123,7 +123,7 @@ Copy `.env.example` and configure at least:
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `API_TOKEN` | Yes | Management API bearer token, minimum 32 characters |
+| `API_TOKEN` | Yes | Management API bearer token, minimum 32 characters |\n| `TIKTOK_CLIENT_KEY` | For acquisition | TikTok developer app client key |\n| `TIKTOK_CLIENT_SECRET` | For acquisition | TikTok developer app secret |\n| `TIKTOK_REDIRECT_URI` | For acquisition | Exact registered HTTPS OAuth callback URI |\n| `TOKEN_ENCRYPTION_KEY` | For acquisition | 32-byte key encoded as 64 hex characters; keep stable and backed up |
 | `WEBHOOK_URL` | For delivery | The one webhook belonging to this bot instance |
 | `WEBHOOK_SECRET` | No | HMAC-SHA256 signing secret |
 | `POSTGRES_PASSWORD` | Yes | Local embedded PostgreSQL password |

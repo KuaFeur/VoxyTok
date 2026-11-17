@@ -7,7 +7,7 @@
   "exported_at": "2026-11-17T00:00:00+00:00",
   "name": "VoxyTok",
   "author": "Kua <https://github.com/KuaFeur>",
-  "description": "Self-hosted TikTok event gateway. One instance is dedicated to one bot and one webhook destination.",
+  "description": "Official TikTok Display API gateway. Each creator explicitly authorizes this one bot instance. PostgreSQL is bundled.",
   "features": null,
   "docker_images": {
     "ghcr.io/kuafeur/voxytok:latest": "ghcr.io/kuafeur/voxytok:latest"
@@ -116,6 +116,46 @@
       "user_viewable": false,
       "user_editable": true,
       "rules": "required|string|min:32|max:256",
+      "field_type": "password"
+    },
+    {
+      "name": "TikTok Client Key",
+      "description": "TikTok for Developers app client key (Login Kit + Display API).",
+      "env_variable": "TIKTOK_CLIENT_KEY",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|max:255",
+      "field_type": "text"
+    },
+    {
+      "name": "TikTok Client Secret",
+      "description": "TikTok developer app secret. Stored only in server environment.",
+      "env_variable": "TIKTOK_CLIENT_SECRET",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|max:255",
+      "field_type": "password"
+    },
+    {
+      "name": "TikTok OAuth Redirect URI",
+      "description": "Exact HTTPS callback URL registered in TikTok for Developers.",
+      "env_variable": "TIKTOK_REDIRECT_URI",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|url|max:512",
+      "field_type": "text"
+    },
+    {
+      "name": "Token Encryption Key",
+      "description": "32-byte AES-256-GCM key as 64 hex characters. Generate once and back it up; losing it requires creators to reconnect.",
+      "env_variable": "TOKEN_ENCRYPTION_KEY",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|regex:/^[A-Fa-f0-9]{64}$/",
       "field_type": "password"
     }
   ]
