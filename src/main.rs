@@ -52,14 +52,11 @@ async fn readiness(State(state): State<AppState>) -> Result<Json<HealthResponse>
     Ok(Json(HealthResponse { status: "ready", service: "voxytok" }))
 }
 
-async fn authenticate<B>(
+async fn authenticate(
     State(state): State<AppState>,
-    request: Request<B>,
+    request: Request,
     next: Next,
-) -> Result<Response, StatusCode>
-where
-    B: Send + 'static,
-{
+) -> Result<Response, StatusCode> {
     let supplied = request
         .headers()
         .get(AUTHORIZATION)
@@ -161,17 +158,9 @@ async fn main() -> anyhow::Result<()> {
         .connect(&database_url)
         .await?;
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS creators (
-            id UUID PRIMARY KEY,
-            username TEXT NOT NULL UNIQUE,
-            display_name TEXT,
-            enabled BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )"
-    )
-    .execute(&db)
-    .await?;
+    sqlx::raw_sql(include_str!("../migrations/0001_initial.sql"))
+        .execute(&db)
+        .await?;
 
     let state = AppState { db, api_token };
     let protected = Router::new()
