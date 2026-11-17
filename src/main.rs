@@ -721,6 +721,10 @@ async fn request_video_page(
     parse_video_page_response(status, payload)
 }
 
+fn is_invalid_access_token_error(error: &anyhow::Error) -> bool {
+    error.to_string().starts_with("invalid_access_token:")
+}
+
 fn is_reauthorization_required(error: &anyhow::Error) -> bool {
     error.to_string().starts_with("reauthorization_required:")
 }
@@ -800,13 +804,19 @@ async fn poll_creator(state: &AppState, mut creator: PollingCreator, config: &Ti
         if let Some(value)=cursor { body["cursor"]=json!(value); }
         let response = match request_video_page(state, &access_token, &body).await {
             Ok(response) => response,
-            Err(error) if error.to_string().starts_with("invalid_access_token:") && !forced_refresh_used => {
+            Err(error) if is_invalid_access_token_error(&error) && !forced_refresh_used => {
                 if creator.refresh_expires_at<=Utc::now() {
                     anyhow::bail!("reauthorization_required: TikTok refresh token expired");
                 }
                 access_token=refresh_creator_token(state,&mut creator,config).await?;
                 forced_refresh_used=true;
-                request_video_page(state,&access_token,&body).await?
+                match request_video_page(state,&access_token,&body).await {
+                    Ok(response) => response,
+                    Err(retry_error) if is_invalid_access_token_error(&retry_error) => {
+                        anyhow::bail!("reauthorization_required: TikTok rejected the refreshed access token");
+                    }
+                    Err(retry_error) => return Err(retry_error),
+                }
             }
             Err(error) => return Err(error),
         };
@@ -1247,6 +1257,18 @@ mod tests {
             json!({"error": {"code": "ok"}}),
         );
         assert!(malformed_success.is_err());
+    }
+
+    #[test]
+    fn rejected_refreshed_access_token_requires_reauthorization() {
+        let rejected = anyhow::anyhow!("invalid_access_token: TikTok rejected the access token");
+        let transient = anyhow::anyhow!("TikTok video.list failed with HTTP 503");
+        assert!(is_invalid_access_token_error(&rejected));
+        assert!(!is_invalid_access_token_error(&transient));
+        let reauthorization = anyhow::anyhow!(
+            "reauthorization_required: TikTok rejected the refreshed access token"
+        );
+        assert!(is_reauthorization_required(&reauthorization));
     }
 
     #[test]
