@@ -716,7 +716,7 @@ async fn poll_creator(state: &AppState, mut creator: PollingCreator, config: &Ti
                 if creator.refresh_expires_at<=Utc::now() {
                     anyhow::bail!("reauthorization_required: TikTok refresh token expired");
                 }
-                access_token=refresh_creator_token(state,&creator,config).await?;
+                access_token=refresh_creator_token(state,&mut creator,config).await?;
                 forced_refresh_used=true;
                 request_video_page(state,&access_token,&body).await?
             }
