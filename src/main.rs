@@ -590,6 +590,42 @@ fn is_permanent_tiktok_auth_error(code: &str) -> bool {
     matches!(code, "invalid_grant" | "invalid_token" | "token_expired" | "user_not_authorized")
 }
 
+fn is_invalid_access_token_code(code: &str) -> bool {
+    matches!(code, "invalid_token" | "token_expired" | "access_token_invalid" | "access_token_expired")
+}
+
+async fn request_video_page(
+    state: &AppState,
+    access_token: &str,
+    body: &Value,
+) -> anyhow::Result<TikTokVideoListResponse> {
+    let response = state.http.post(TIKTOK_VIDEO_LIST_URL)
+        .query(&[("fields", "id,title,video_description,create_time,duration,cover_image_url,share_url,embed_link")])
+        .bearer_auth(access_token)
+        .json(body)
+        .send()
+        .await?;
+    let status = response.status();
+    let payload: Value = response.json().await?;
+    if !status.is_success() {
+        let code = payload.get("error").and_then(Value::as_str).unwrap_or("unknown");
+        if is_invalid_access_token_code(code) || status == StatusCode::UNAUTHORIZED {
+            anyhow::bail!("invalid_access_token: TikTok rejected the access token (HTTP {status}, code {code})");
+        }
+        anyhow::bail!("TikTok video.list failed with HTTP {status} (provider code: {code})");
+    }
+    let parsed: TikTokVideoListResponse = serde_json::from_value(payload)?;
+    if let Some(api_error) = &parsed.error {
+        if let Some(code) = api_error.code.as_deref().filter(|code| *code != "ok") {
+            if is_invalid_access_token_code(code) {
+                anyhow::bail!("invalid_access_token: TikTok rejected the access token ({code})");
+            }
+            anyhow::bail!("TikTok video.list API error ({code}): {}", api_error.message.as_deref().unwrap_or_default());
+        }
+    }
+    Ok(parsed)
+}
+
 fn is_reauthorization_required(error: &anyhow::Error) -> bool {
     error.to_string().starts_with("reauthorization_required:")
 }
@@ -631,7 +667,7 @@ async fn refresh_creator_token(state: &AppState, creator: &PollingCreator, confi
 }
 
 async fn poll_creator(state: &AppState, creator: PollingCreator, config: &TikTokConfig) -> anyhow::Result<()> {
-    let access_token=if creator.access_expires_at<=Utc::now()+ChronoDuration::minutes(10) {
+    let mut access_token=if creator.access_expires_at<=Utc::now()+ChronoDuration::minutes(10) {
         if creator.refresh_expires_at<=Utc::now() {
             sqlx::query("UPDATE creators SET enabled=FALSE,next_poll_at=NULL,last_error='TikTok refresh token expired; creator must reconnect' WHERE id=$1")
                 .bind(creator.id).execute(&state.db).await?;
@@ -641,6 +677,9 @@ async fn poll_creator(state: &AppState, creator: PollingCreator, config: &TikTok
     } else {
         decrypt_token(&config.encryption_key,&creator.access_token_enc)?
     };
+    // A provider may invalidate an access token before its advertised expiry.
+    // Refresh at most once per synchronization run, then retry the rejected page.
+    let mut forced_refresh_used=false;
 
     let mut inserted_count=0usize;
     let mut cursor: Option<i64>=None;
@@ -649,14 +688,18 @@ async fn poll_creator(state: &AppState, creator: PollingCreator, config: &TikTok
         pages_fetched+=1;
         let mut body=json!({"max_count":20});
         if let Some(value)=cursor { body["cursor"]=json!(value); }
-        let response: TikTokVideoListResponse=state.http.post(TIKTOK_VIDEO_LIST_URL)
-            .query(&[("fields","id,title,video_description,create_time,duration,cover_image_url,share_url,embed_link")])
-            .bearer_auth(&access_token).json(&body).send().await?
-            .error_for_status()?.json().await?;
-        if let Some(api_error)=response.error
-            && api_error.code.as_deref().is_some_and(|code|code!="ok") {
-            anyhow::bail!("TikTok API error: {}",api_error.message.unwrap_or_default());
-        }
+        let response = match request_video_page(state, &access_token, &body).await {
+            Ok(response) => response,
+            Err(error) if error.to_string().starts_with("invalid_access_token:") && !forced_refresh_used => {
+                if creator.refresh_expires_at<=Utc::now() {
+                    anyhow::bail!("reauthorization_required: TikTok refresh token expired");
+                }
+                access_token=refresh_creator_token(state,&creator,config).await?;
+                forced_refresh_used=true;
+                request_video_page(state,&access_token,&body).await?
+            }
+            Err(error) => return Err(error),
+        };
         let Some(data)=response.data else { break; };
         let videos=data.videos.unwrap_or_default();
         for video in videos {
@@ -900,6 +943,16 @@ mod tests {
         assert_eq!(delivery_count,1);
         sqlx::query("DELETE FROM creators WHERE id=$1").bind(creator_id).execute(&db).await.unwrap();
         db.close().await;
+    }
+
+    #[test]
+    fn invalid_access_token_errors_trigger_one_refresh_path() {
+        assert!(is_invalid_access_token_code("invalid_token"));
+        assert!(is_invalid_access_token_code("token_expired"));
+        assert!(is_invalid_access_token_code("access_token_invalid"));
+        assert!(is_invalid_access_token_code("access_token_expired"));
+        assert!(!is_invalid_access_token_code("rate_limit_exceeded"));
+        assert!(!is_invalid_access_token_code("server_error"));
     }
 
     #[test]
