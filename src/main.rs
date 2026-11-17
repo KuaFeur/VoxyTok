@@ -333,6 +333,15 @@ async fn delete_creator(
     // Hold the refresh lock through revocation so a concurrent poll cannot
     // rotate the token between selecting it and revoking it.
     let _refresh_guard = state.token_refresh_lock.lock().await;
+    reload_creator_credentials(&state, &mut creator).await
+        .map_err(|error| {
+            if is_reauthorization_required(&error) {
+                StatusCode::NOT_FOUND
+            } else {
+                tracing::error!(%error, "could not reload TikTok credentials before revocation");
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
     let access_token = if creator.access_expires_at <= Utc::now()
         && creator.refresh_expires_at > Utc::now()
     {
@@ -840,6 +849,24 @@ fn apply_refreshed_credentials(
     creator.refresh_expires_at = refresh_expires_at;
 }
 
+async fn reload_creator_credentials(
+    state: &AppState,
+    creator: &mut PollingCreator,
+) -> anyhow::Result<bool> {
+    let current = sqlx::query_as::<_, (String, String, DateTime<Utc>, DateTime<Utc>)>(
+        "SELECT access_token_enc,refresh_token_enc,access_expires_at,refresh_expires_at
+         FROM creators WHERE id=$1",
+    ).bind(creator.id).fetch_optional(&state.db).await?
+        .ok_or_else(|| anyhow::anyhow!("reauthorization_required: creator no longer exists"))?;
+    let changed = current.0 != creator.access_token_enc
+        || current.1 != creator.refresh_token_enc;
+    creator.access_token_enc = current.0;
+    creator.refresh_token_enc = current.1;
+    creator.access_expires_at = current.2;
+    creator.refresh_expires_at = current.3;
+    Ok(changed)
+}
+
 async fn refresh_creator_token(state: &AppState, creator: &mut PollingCreator, config: &TikTokConfig) -> anyhow::Result<String> {
     let _refresh_guard = state.token_refresh_lock.lock().await;
     refresh_creator_token_locked(state, creator, config).await
@@ -848,17 +875,7 @@ async fn refresh_creator_token(state: &AppState, creator: &mut PollingCreator, c
 async fn refresh_creator_token_locked(state: &AppState, creator: &mut PollingCreator, config: &TikTokConfig) -> anyhow::Result<String> {
     // Caller holds token_refresh_lock. TikTok rotates refresh tokens on every
     // successful refresh, so reload credentials after acquiring the lock.
-    let current = sqlx::query_as::<_, (String, String, DateTime<Utc>, DateTime<Utc>)>(
-        "SELECT access_token_enc,refresh_token_enc,access_expires_at,refresh_expires_at
-         FROM creators WHERE id=$1",
-    ).bind(creator.id).fetch_optional(&state.db).await?
-        .ok_or_else(|| anyhow::anyhow!("reauthorization_required: creator no longer exists"))?;
-    let credentials_changed = current.0 != creator.access_token_enc
-        || current.1 != creator.refresh_token_enc;
-    creator.access_token_enc = current.0;
-    creator.refresh_token_enc = current.1;
-    creator.access_expires_at = current.2;
-    creator.refresh_expires_at = current.3;
+    let credentials_changed = reload_creator_credentials(state, creator).await?;
     // Another caller may have completed a refresh while this caller waited
     // for the lock. Reuse that fresh access token instead of rotating again.
     if credentials_changed {
