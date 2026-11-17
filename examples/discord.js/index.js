@@ -110,8 +110,11 @@ async function syncOAuthConnections() {
           [row.reference, status.creator_id],
         );
         console.info("A TikTok creator was linked to a local Discord user");
-      } else if (status.status === "failed") {
+      } else if (["failed", "expired", "reauthorization_required"].includes(status.status)) {
         await pool.query("DELETE FROM voxytok_oauth_requests WHERE reference=$1", [row.reference]);
+        if (status.status === "reauthorization_required") {
+          console.info("A TikTok creator must reconnect their account before monitoring can resume");
+        }
       }
     } catch (error) {
       console.error("Could not sync OAuth connection:", error);

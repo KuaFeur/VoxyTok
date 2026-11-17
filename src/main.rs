@@ -463,7 +463,11 @@ async fn get_tiktok_connection(
         return Err(StatusCode::NOT_FOUND);
     }
     let connection = sqlx::query_as::<_, OAuthConnectionStatus>(
-        "SELECT CASE WHEN s.status='pending' AND s.expires_at<=NOW() THEN 'expired' ELSE s.status END AS status,
+        "SELECT CASE
+             WHEN s.status='pending' AND s.expires_at<=NOW() THEN 'expired'
+             WHEN s.status='connected' AND c.enabled=FALSE THEN 'reauthorization_required'
+             ELSE s.status
+         END AS status,
          s.creator_id,c.display_name,s.expires_at
          FROM oauth_states s LEFT JOIN creators c ON c.id=s.creator_id
          WHERE s.client_reference_hash=$1",
@@ -582,15 +586,40 @@ async fn dispatch_loop(state: AppState) {
     }
 }
 
+fn is_permanent_tiktok_auth_error(code: &str) -> bool {
+    matches!(code, "invalid_grant" | "invalid_token" | "token_expired" | "user_not_authorized")
+}
+
+fn is_reauthorization_required(error: &anyhow::Error) -> bool {
+    error.to_string().starts_with("reauthorization_required:")
+}
+
 async fn refresh_creator_token(state: &AppState, creator: &PollingCreator, config: &TikTokConfig) -> anyhow::Result<String> {
     let refresh_token=decrypt_token(&config.encryption_key,&creator.refresh_token_enc)?;
-    let response: TikTokTokenResponse=state.http.post(TIKTOK_TOKEN_URL)
+    let response=state.http.post(TIKTOK_TOKEN_URL)
         .form(&[
             ("client_key",config.client_key.as_str()),
             ("client_secret",config.client_secret.as_str()),
             ("grant_type","refresh_token"),
             ("refresh_token",refresh_token.as_str()),
-        ]).send().await?.error_for_status()?.json().await?;
+        ]).send().await?;
+    let status=response.status();
+    let body: Value=response.json().await?;
+    if !status.is_success() {
+        let code=body.get("error").and_then(Value::as_str).unwrap_or("unknown");
+        if is_permanent_tiktok_auth_error(code) {
+            anyhow::bail!("reauthorization_required: TikTok rejected the refresh token ({code})");
+        }
+        anyhow::bail!("TikTok token refresh failed with HTTP {status} (provider code: {code})");
+    }
+    if let Some(code)=body.get("error").and_then(Value::as_str)
+        && !code.is_empty() && code!="ok" {
+        if is_permanent_tiktok_auth_error(code) {
+            anyhow::bail!("reauthorization_required: TikTok rejected the refresh token ({code})");
+        }
+        anyhow::bail!("TikTok token refresh failed (provider code: {code})");
+    }
+    let response: TikTokTokenResponse=serde_json::from_value(body)?;
     let access_enc=encrypt_token(&config.encryption_key,&response.access_token)?;
     let refresh_enc=encrypt_token(&config.encryption_key,&response.refresh_token)?;
     sqlx::query("UPDATE creators SET access_token_enc=$2,refresh_token_enc=$3,access_expires_at=$4,refresh_expires_at=$5 WHERE id=$1")
@@ -604,8 +633,9 @@ async fn refresh_creator_token(state: &AppState, creator: &PollingCreator, confi
 async fn poll_creator(state: &AppState, creator: PollingCreator, config: &TikTokConfig) -> anyhow::Result<()> {
     let access_token=if creator.access_expires_at<=Utc::now()+ChronoDuration::minutes(10) {
         if creator.refresh_expires_at<=Utc::now() {
-            sqlx::query("UPDATE creators SET enabled=FALSE WHERE id=$1").bind(creator.id).execute(&state.db).await?;
-            anyhow::bail!("TikTok refresh token expired; creator must reconnect");
+            sqlx::query("UPDATE creators SET enabled=FALSE,next_poll_at=NULL,last_error='TikTok refresh token expired; creator must reconnect' WHERE id=$1")
+                .bind(creator.id).execute(&state.db).await?;
+            anyhow::bail!("reauthorization_required: TikTok refresh token expired");
         }
         refresh_creator_token(state,&creator,config).await?
     } else {
@@ -689,10 +719,21 @@ async fn tiktok_poll_loop(state: AppState) {
                 for creator in creators {
                     if let Err(error)=poll_creator(&state,creator.clone(),&config).await {
                         let message=error.to_string().chars().take(1000).collect::<String>();
-                        let persisted=sqlx::query("UPDATE creators SET poll_failures=poll_failures+1,next_poll_at=NOW()+make_interval(secs => LEAST(300 * (1 << LEAST(poll_failures,4)),3600)),last_error=$2 WHERE id=$1")
-                            .bind(creator.id).bind(&message).execute(&state.db).await;
-                        if let Err(db_error)=persisted { tracing::error!(%db_error,creator=%creator.username,"could not persist polling backoff"); }
-                        tracing::error!(%error,creator=%creator.username,"TikTok synchronization failed; retry scheduled");
+                        if is_reauthorization_required(&error) {
+                            let persisted=sqlx::query("UPDATE creators SET enabled=FALSE,next_poll_at=NULL,last_error=$2 WHERE id=$1")
+                                .bind(creator.id).bind(&message).execute(&state.db).await;
+                            if let Err(db_error)=persisted {
+                                tracing::error!(%db_error,creator=%creator.username,"could not persist reauthorization requirement");
+                            }
+                            tracing::warn!(creator=%creator.username,"TikTok authorization is no longer valid; creator must reconnect");
+                        } else {
+                            let persisted=sqlx::query("UPDATE creators SET poll_failures=poll_failures+1,next_poll_at=NOW()+make_interval(secs => LEAST(300 * (1 << LEAST(poll_failures,4)),3600)),last_error=$2 WHERE id=$1")
+                                .bind(creator.id).bind(&message).execute(&state.db).await;
+                            if let Err(db_error)=persisted {
+                                tracing::error!(%db_error,creator=%creator.username,"could not persist polling backoff");
+                            }
+                            tracing::error!(%error,creator=%creator.username,"TikTok synchronization failed; retry scheduled");
+                        }
                     }
                 }
             }
@@ -859,6 +900,16 @@ mod tests {
         assert_eq!(delivery_count,1);
         sqlx::query("DELETE FROM creators WHERE id=$1").bind(creator_id).execute(&db).await.unwrap();
         db.close().await;
+    }
+
+    #[test]
+    fn permanent_tiktok_auth_errors_require_reauthorization() {
+        assert!(is_permanent_tiktok_auth_error("invalid_grant"));
+        assert!(is_permanent_tiktok_auth_error("invalid_token"));
+        assert!(is_permanent_tiktok_auth_error("token_expired"));
+        assert!(is_permanent_tiktok_auth_error("user_not_authorized"));
+        assert!(!is_permanent_tiktok_auth_error("server_error"));
+        assert!(!is_permanent_tiktok_auth_error("rate_limit_exceeded"));
     }
 
     #[test]

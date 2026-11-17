@@ -83,7 +83,7 @@ Possible response:
 }
 ```
 
-Statuses: `pending`, `processing`, `connected`, `failed`, `expired` (the authorization link expired without a successful callback). The reference is one-use and unique per OAuth attempt. Generate a new reference for each attempt. The status record is retained for at least 24 hours after the authorization URL expires.
+Statuses: `pending`, `processing`, `connected`, `failed`, `expired` (the authorization link expired without a successful callback), and `reauthorization_required` (the creator's refresh token expired or TikTok permanently rejected it). Temporary network, rate-limit and server errors keep the creator connected and use retry backoff. When reauthorization is required, start a new OAuth attempt with a fresh reference. The reference is one-use and unique per OAuth attempt. Generate a new reference for each attempt. The status record is retained for at least 24 hours after the authorization URL expires.
 
 ## Creators
 

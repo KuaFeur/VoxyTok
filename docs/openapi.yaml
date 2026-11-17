@@ -79,7 +79,7 @@ paths:
                 type: object
                 required: [status, expires_at]
                 properties:
-                  status: { type: string, enum: [pending, processing, connected, failed, expired] }
+                  status: { type: string, enum: [pending, processing, connected, failed, expired, reauthorization_required] }
                   creator_id: { type: [string, "null"], format: uuid }
                   display_name: { type: [string, "null"] }
                   expires_at: { type: string, format: date-time }
