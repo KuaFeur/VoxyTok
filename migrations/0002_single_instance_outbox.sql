@@ -31,4 +31,4 @@ BEGIN
             WHERE status IN ('pending', 'retry');
     END IF;
 END;
-$;
+$$;
