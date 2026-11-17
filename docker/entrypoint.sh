@@ -32,24 +32,31 @@ fi
 mkdir -p "$DATA_DIR" "$PGDATA" /var/run/postgresql /var/log/postgresql
 chown -R postgres:postgres "$PGDATA" /var/run/postgresql /var/log/postgresql
 
+# Debian stores server binaries in a versioned directory, not on PATH.
+PG_BIN="$(find /usr/lib/postgresql -mindepth 2 -maxdepth 2 -type f -name initdb -printf '%h\\n' | sort -V | tail -n 1)"
+if [[ -z "$PG_BIN" ]]; then
+  echo "Could not locate PostgreSQL server binaries." >&2
+  exit 1
+fi
+
 if [[ ! -s "$PGDATA/PG_VERSION" ]]; then
-  gosu postgres initdb -D "$PGDATA" --auth-local=trust --auth-host=scram-sha-256
-  gosu postgres pg_ctl -D "$PGDATA" -o "-c listen_addresses=127.0.0.1 -p $POSTGRES_PORT" -w start
-  gosu postgres psql -v ON_ERROR_STOP=1 --username postgres <<SQL
+  gosu postgres "$PG_BIN/initdb" -D "$PGDATA" --auth-local=trust --auth-host=scram-sha-256
+  gosu postgres "$PG_BIN/pg_ctl" -D "$PGDATA" -o "-c listen_addresses=127.0.0.1 -p $POSTGRES_PORT" -w start
+  gosu postgres "$PG_BIN/psql" -v ON_ERROR_STOP=1 --username postgres <<SQL
 CREATE USER "$POSTGRES_USER" WITH PASSWORD '$POSTGRES_PASSWORD';
 CREATE DATABASE "$POSTGRES_DB" OWNER "$POSTGRES_USER";
 SQL
-  gosu postgres pg_ctl -D "$PGDATA" -m fast -w stop
+  gosu postgres "$PG_BIN/pg_ctl" -D "$PGDATA" -m fast -w stop
 fi
 
-gosu postgres pg_ctl -D "$PGDATA" -o "-c listen_addresses=127.0.0.1 -p $POSTGRES_PORT" -w start
+gosu postgres "$PG_BIN/pg_ctl" -D "$PGDATA" -o "-c listen_addresses=127.0.0.1 -p $POSTGRES_PORT" -w start
 app_pid=""
 cleanup() {
   if [[ -n "$app_pid" ]] && kill -0 "$app_pid" 2>/dev/null; then
     kill -TERM "$app_pid" 2>/dev/null || true
     wait "$app_pid" 2>/dev/null || true
   fi
-  gosu postgres pg_ctl -D "$PGDATA" -m fast -w stop || true
+  gosu postgres "$PG_BIN/pg_ctl" -D "$PGDATA" -m fast -w stop || true
 }
 trap cleanup EXIT TERM INT
 
