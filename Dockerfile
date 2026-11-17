@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
 FROM rust:1-bookworm AS builder
 WORKDIR /build
-COPY Cargo.toml ./
+COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY migrations ./migrations
-RUN cargo build --release
+RUN cargo build --locked --release
 
 FROM debian:bookworm-slim
 ENV PORT=8080 RUST_LOG=voxytok=info VOXYTOK_DATA_DIR=/home/container/data \
