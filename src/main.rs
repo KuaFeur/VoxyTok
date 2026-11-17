@@ -615,13 +615,13 @@ async fn request_video_page(
         anyhow::bail!("TikTok video.list failed with HTTP {status} (provider code: {code})");
     }
     let parsed: TikTokVideoListResponse = serde_json::from_value(payload)?;
-    if let Some(api_error) = &parsed.error {
-        if let Some(code) = api_error.code.as_deref().filter(|code| *code != "ok") {
-            if is_invalid_access_token_code(code) {
-                anyhow::bail!("invalid_access_token: TikTok rejected the access token ({code})");
-            }
-            anyhow::bail!("TikTok video.list API error ({code}): {}", api_error.message.as_deref().unwrap_or_default());
+    if let Some(api_error) = &parsed.error
+        && let Some(code) = api_error.code.as_deref().filter(|code| *code != "ok")
+    {
+        if is_invalid_access_token_code(code) {
+            anyhow::bail!("invalid_access_token: TikTok rejected the access token ({code})");
         }
+        anyhow::bail!("TikTok video.list API error ({code}): {}", api_error.message.as_deref().unwrap_or_default());
     }
     Ok(parsed)
 }
