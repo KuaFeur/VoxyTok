@@ -102,7 +102,7 @@ struct OAuthStartRequest {
     reference: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, FromRow)]
 struct OAuthConnectionStatus {
     status: String,
     creator_id: Option<Uuid>,
@@ -113,7 +113,7 @@ struct OAuthConnectionStatus {
 #[derive(FromRow)]
 struct ConsumedOAuthState {
     state_hash: String,
-    client_reference_hash: String,
+    client_reference_hash: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -230,6 +230,11 @@ fn validate_webhook_url(raw: &str) -> anyhow::Result<Url> {
     Ok(url)
 }
 
+fn valid_oauth_reference(reference: &str) -> bool {
+    (32..=128).contains(&reference.len())
+        && reference.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+}
+
 fn hash_state(state: &str) -> String {
     hex::encode(Sha256::digest(state.as_bytes()))
 }
@@ -310,8 +315,7 @@ async fn start_tiktok_oauth(
     Json(input): Json<OAuthStartRequest>,
 ) -> Result<Json<OAuthStartResponse>, StatusCode> {
     let config = state.tiktok.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    if input.reference.len() < 32 || input.reference.len() > 128
-        || !input.reference.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
+    if !valid_oauth_reference(&input.reference) {
         return Err(StatusCode::UNPROCESSABLE_ENTITY);
     }
 
@@ -358,6 +362,9 @@ async fn tiktok_callback(
         .map_err(|error| { tracing::error!(%error, "could not consume OAuth state"); StatusCode::INTERNAL_SERVER_ERROR })?;
     let Some(consumed) = consumed else { return Err(StatusCode::BAD_REQUEST); };
 
+    if consumed.client_reference_hash.is_none() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let result = complete_tiktok_authorization(&state, config, &callback).await;
     match result {
         Ok((creator_id, display_name)) => {
@@ -448,12 +455,12 @@ async fn get_tiktok_connection(
     State(state): State<AppState>,
     Path(reference): Path<String>,
 ) -> Result<Json<OAuthConnectionStatus>, StatusCode> {
-    if reference.len() < 32 || reference.len() > 128
-        || !reference.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
+    if !valid_oauth_reference(&reference) {
         return Err(StatusCode::NOT_FOUND);
     }
     let connection = sqlx::query_as::<_, OAuthConnectionStatus>(
-        "SELECT s.status,s.creator_id,c.display_name,s.expires_at
+        "SELECT CASE WHEN s.status='pending' AND s.expires_at<=NOW() THEN 'expired' ELSE s.status END AS status,
+         s.creator_id,c.display_name,s.expires_at
          FROM oauth_states s LEFT JOIN creators c ON c.id=s.creator_id
          WHERE s.client_reference_hash=$1",
     ).bind(hash_state(&reference)).fetch_optional(&state.db).await
@@ -705,6 +712,7 @@ async fn main() -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!("../migrations/0002_single_instance_outbox.sql")).execute(&db).await?;
     sqlx::raw_sql(include_str!("../migrations/0003_tiktok_oauth.sql")).execute(&db).await?;
     sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await?;
+    sqlx::raw_sql(include_str!("../migrations/0005_oauth_connection_tracking.sql")).execute(&db).await?;
 
     let webhook_url=env::var("WEBHOOK_URL").ok().filter(|value|!value.trim().is_empty());
     if let Some(url)=&webhook_url { validate_webhook_url(url)?; }
@@ -827,11 +835,11 @@ mod tests {
 
     #[test]
     fn oauth_reference_validation_rejects_short_or_unsafe_values() {
-        let valid = "a".repeat(48);
-        assert!(valid.len() >= 32 && valid.len() <= 128
-            && valid.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'));
-        assert!(!"short".bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') || "short".len() < 32);
-        assert!("contains/slash________________________".bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') == false);
+        assert!(valid_oauth_reference(&"a".repeat(32)));
+        assert!(valid_oauth_reference(&"Z".repeat(128)));
+        assert!(!valid_oauth_reference("too-short"));
+        assert!(!valid_oauth_reference(&"a".repeat(129)));
+        assert!(!valid_oauth_reference("unsafe/reference________________"));
     }
 
     #[test]

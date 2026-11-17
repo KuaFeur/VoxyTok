@@ -83,7 +83,7 @@ Possible response:
 }
 ```
 
-Statuses: `pending`, `processing`, `connected`, `failed`. The reference is one-use and unique per OAuth attempt. Generate a new reference for each attempt. The status record is retained for at least 24 hours after the authorization URL expires.
+Statuses: `pending`, `processing`, `connected`, `failed`, `expired` (the authorization link expired without a successful callback). The reference is one-use and unique per OAuth attempt. Generate a new reference for each attempt. The status record is retained for at least 24 hours after the authorization URL expires.
 
 ## Creators
 
