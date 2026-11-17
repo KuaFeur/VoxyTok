@@ -197,6 +197,19 @@ fn decrypt_token(key: &[u8; 32], encrypted: &str) -> anyhow::Result<String> {
     Ok(String::from_utf8(plaintext)?)
 }
 
+fn validate_webhook_url(raw: &str) -> anyhow::Result<Url> {
+    let url = Url::parse(raw)?;
+    let host = url.host_str().unwrap_or_default();
+    let loopback = matches!(host, "localhost" | "127.0.0.1" | "::1");
+    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+        anyhow::bail!("WEBHOOK_URL must use HTTPS (HTTP is allowed only for localhost)");
+    }
+    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
+        anyhow::bail!("WEBHOOK_URL must not contain credentials or a URL fragment");
+    }
+    Ok(url)
+}
+
 fn hash_state(state: &str) -> String {
     hex::encode(Sha256::digest(state.as_bytes()))
 }
@@ -275,6 +288,9 @@ async fn delete_creator(State(state): State<AppState>, Path(id): Path<Uuid>) -> 
 async fn start_tiktok_oauth(State(state): State<AppState>) -> Result<Json<OAuthStartResponse>, StatusCode> {
     let config = state.tiktok.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let state_token = Uuid::new_v4().to_string() + &Uuid::new_v4().simple().to_string();
+    sqlx::query("DELETE FROM oauth_states WHERE expires_at <= NOW()")
+        .execute(&state.db).await
+        .map_err(|error| { tracing::error!(%error, "could not clean expired OAuth states"); StatusCode::INTERNAL_SERVER_ERROR })?;
     sqlx::query(
         "INSERT INTO oauth_states (state_hash, expires_at) VALUES ($1, NOW() + INTERVAL '10 minutes')",
     ).bind(hash_state(&state_token)).execute(&state.db).await
@@ -615,11 +631,11 @@ async fn main() -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await?;
 
     let webhook_url=env::var("WEBHOOK_URL").ok().filter(|value|!value.trim().is_empty());
-    if let Some(url)=&webhook_url {
-        let parsed=Url::parse(url)?;
-        if !matches!(parsed.scheme(),"http"|"https") { anyhow::bail!("WEBHOOK_URL must use http or https"); }
-    }
+    if let Some(url)=&webhook_url { validate_webhook_url(url)?; }
     let webhook_secret=env::var("WEBHOOK_SECRET").ok().filter(|value|!value.is_empty());
+    if webhook_secret.as_ref().is_some_and(|secret| secret.len() < 32) {
+        anyhow::bail!("WEBHOOK_SECRET must contain at least 32 characters");
+    }
     let tiktok_values=(
         env::var("TIKTOK_CLIENT_KEY").ok(),
         env::var("TIKTOK_CLIENT_SECRET").ok(),
@@ -629,15 +645,26 @@ async fn main() -> anyhow::Result<()> {
     let tiktok=match tiktok_values {
         (None,None,None,None)=>None,
         (Some(client_key),Some(client_secret),Some(redirect_uri),Some(key_hex))=>{
+            if client_key.trim().is_empty() || client_secret.trim().is_empty() || redirect_uri.trim().is_empty() {
+                anyhow::bail!("TikTok client key, client secret and redirect URI must not be empty");
+            }
             let parsed=Url::parse(&redirect_uri)?;
-            if parsed.scheme()!="https" { anyhow::bail!("TIKTOK_REDIRECT_URI must use HTTPS"); }
+            if parsed.scheme()!="https" || parsed.host_str().is_none()
+                || !parsed.username().is_empty() || parsed.password().is_some() || parsed.fragment().is_some() {
+                anyhow::bail!("TIKTOK_REDIRECT_URI must be an HTTPS URL without credentials or a fragment");
+            }
             let key_vec=hex::decode(key_hex)?;
             let encryption_key:[u8;32]=key_vec.try_into().map_err(|_|anyhow::anyhow!("TOKEN_ENCRYPTION_KEY must be exactly 64 hexadecimal characters"))?;
             Some(TikTokConfig{client_key,client_secret,redirect_uri,encryption_key})
         }
         _=>anyhow::bail!("Configure all four TikTok variables together: TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REDIRECT_URI, TOKEN_ENCRYPTION_KEY"),
     };
-    let http=Client::builder().timeout(Duration::from_secs(20)).user_agent("VoxyTok/0.3 (+https://github.com/KuaFeur/VoxyTok)").build()?;
+    // Do not forward signed event bodies or secrets to a redirect target.
+    let http=Client::builder()
+        .timeout(Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("VoxyTok/0.3 (+https://github.com/KuaFeur/VoxyTok)")
+        .build()?;
     let state=AppState{db,api_token,webhook_url,webhook_secret,tiktok,http};
     tokio::spawn(dispatch_loop(state.clone()));
     tokio::spawn(tiktok_poll_loop(state.clone()));
@@ -718,6 +745,15 @@ mod tests {
         assert_eq!(delivery_count,1);
         sqlx::query("DELETE FROM creators WHERE id=$1").bind(creator_id).execute(&db).await.unwrap();
         db.close().await;
+    }
+
+    #[test]
+    fn webhook_url_requires_tls_except_for_loopback() {
+        assert!(validate_webhook_url("https://hooks.example.com/voxytok").is_ok());
+        assert!(validate_webhook_url("http://127.0.0.1:3000/voxytok").is_ok());
+        assert!(validate_webhook_url("http://hooks.example.com/voxytok").is_err());
+        assert!(validate_webhook_url("https://user:pass@hooks.example.com/voxytok").is_err());
+        assert!(validate_webhook_url("https://hooks.example.com/voxytok#fragment").is_err());
     }
 
     #[test]

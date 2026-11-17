@@ -109,12 +109,16 @@ app.post("/voxytok", express.raw({ type: "application/json", limit: "256kb" }), 
       throw new Error("Configured Discord channel is not a text channel");
     }
 
+    const truncate = (value, limit) => String(value ?? "").slice(0, limit);
     const embed = new EmbedBuilder()
-      .setTitle(video.title || "New TikTok video")
-      .setDescription(video.description || "A creator published a new video.")
-      .addFields({ name: "Creator", value: creator.display_name || creator.username || "TikTok creator" })
-      .setURL(video.url || null);
+      .setTitle(truncate(video.title || "New TikTok video", 256))
+      .setDescription(truncate(video.description || "A creator published a new video.", 4096))
+      .addFields({
+        name: "Creator",
+        value: truncate(creator.display_name || creator.username || "TikTok creator", 1024),
+      });
 
+    if (video.url) embed.setURL(video.url);
     if (video.cover_image_url) embed.setImage(video.cover_image_url);
     await channel.send({ embeds: [embed] });
 

@@ -30,6 +30,10 @@ jobs:
       DATABASE_URL: postgres://voxytok:voxytok_ci_password@localhost:5432/voxytok_test
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check examples/discord.js/index.js
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
