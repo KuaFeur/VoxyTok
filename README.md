@@ -79,7 +79,7 @@ The provider polls periodically (currently every 12 hours); this is not an insta
 
 Never expose `API_TOKEN`, TikTok client secrets or `TOKEN_ENCRYPTION_KEY` to end users or browser JavaScript.
 
-See [API reference](docs/API.md) and [integration guide](docs/INTEGRATION.md). A Discord.js example is available in [examples/discord.js](examples/discord.js/).
+See [API reference](docs/API.md), [OpenAPI 3.1 specification](docs/openapi.yaml) and [integration guide](docs/INTEGRATION.md). A Discord.js example is available in [examples/discord.js](examples/discord.js/).
 
 ## API overview
 

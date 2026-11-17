@@ -1,0 +1,208 @@
+openapi: 3.1.0
+info:
+  title: VoxyTok API
+  version: 0.3.0
+  description: >
+    Self-hosted TikTok event gateway. One deployment belongs to one consuming
+    bot or application. Management routes use a bearer API token. TikTok
+    creators must authorize their own accounts through Login Kit.
+servers:
+  - url: https://voxytok.example.com
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      security: []
+      summary: Liveness check
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+  /readyz:
+    get:
+      security: []
+      summary: Database readiness check
+      responses:
+        "200":
+          description: Database is reachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        "503":
+          description: Database unavailable
+  /api/v1/oauth/tiktok/start:
+    post:
+      summary: Start TikTok Login Kit authorization
+      description: Creates a one-time OAuth state. Send the returned URL to the creator. The URL expires after ten minutes.
+      responses:
+        "200":
+          description: Authorization URL created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorization_url, expires_in_seconds]
+                properties:
+                  authorization_url: { type: string, format: uri }
+                  expires_in_seconds: { type: integer, const: 600 }
+        "503": { description: TikTok provider is not configured }
+  /oauth/tiktok/callback:
+    get:
+      security: []
+      summary: TikTok OAuth callback
+      description: Public callback registered in TikTok developer settings. OAuth state is validated and consumed once.
+      parameters:
+        - in: query
+          name: code
+          schema: { type: string }
+        - in: query
+          name: state
+          required: true
+          schema: { type: string }
+        - in: query
+          name: error
+          schema: { type: string }
+        - in: query
+          name: error_description
+          schema: { type: string }
+      responses:
+        "200":
+          description: Creator connected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connected: { type: boolean, const: true }
+                  display_name: { type: [string, "null"] }
+                  message: { type: string }
+        "400": { description: Invalid or expired state, or authorization declined }
+        "403": { description: Required video.list scope was not granted }
+  /api/v1/creators:
+    get:
+      summary: List creators for this VoxyTok instance
+      responses:
+        "200":
+          description: Creator records
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Creator" }
+    post:
+      summary: Create a local creator record
+      description: This does not grant TikTok access. The official provider polls only creators who completed OAuth.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username: { type: string, maxLength: 64 }
+      responses:
+        "201":
+          description: Creator record created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Creator" }
+        "422": { description: Invalid username }
+  /api/v1/creators/{id}:
+    delete:
+      summary: Remove a creator and related event history
+      parameters:
+        - $ref: "#/components/parameters/UuidPath"
+      responses:
+        "204": { description: Creator deleted }
+        "404": { description: Creator not found }
+  /api/v1/events:
+    get:
+      summary: List recent events and delivery states
+      responses:
+        "200":
+          description: Up to 100 recent events
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+    post:
+      summary: Ingest a normalized publication event
+      description: Intended for provider adapters and tests. Duplicate creator/video pairs are acknowledged without a second delivery.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestEvent"
+      responses:
+        "202":
+          description: New event accepted and queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IngestResponse" }
+        "200":
+          description: Duplicate event already exists
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IngestResponse" }
+        "404": { description: Creator not found or disabled }
+        "422": { description: Invalid event payload }
+  /api/v1/events/{id}/retry:
+    post:
+      summary: Retry a failed or retryable webhook delivery
+      parameters:
+        - $ref: "#/components/parameters/UuidPath"
+      responses:
+        "202": { description: Retry scheduled }
+        "404": { description: Delivery not found or not retryable }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API token
+  parameters:
+    UuidPath:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    Health:
+      type: object
+      required: [status, service, webhook_configured, tiktok_provider_configured]
+      properties:
+        status: { type: string, enum: [ok, ready] }
+        service: { type: string, const: voxytok }
+        webhook_configured: { type: boolean }
+        tiktok_provider_configured: { type: boolean }
+    Creator:
+      type: object
+      required: [id, username, enabled, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        display_name: { type: [string, "null"] }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+    IngestEvent:
+      type: object
+      required: [creator_id, platform_video_id, payload]
+      properties:
+        creator_id: { type: string, format: uuid }
+        platform_video_id: { type: string, maxLength: 128 }
+        published_at: { type: [string, "null"], format: date-time }
+        payload: { type: object, additionalProperties: true }
+    IngestResponse:
+      type: object
+      required: [accepted, duplicate, video_id, delivery_id]
+      properties:
+        accepted: { type: boolean }
+        duplicate: { type: boolean }
+        video_id: { type: string, format: uuid }
+        delivery_id: { type: [string, "null"], format: uuid }
