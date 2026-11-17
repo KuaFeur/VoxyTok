@@ -30,5 +30,5 @@ BEGIN
             ON deliveries (next_attempt_at, created_at)
             WHERE status IN ('pending', 'retry');
     END IF;
-END
-$$;
+END;
+$;
