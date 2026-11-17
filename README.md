@@ -72,7 +72,7 @@ The provider polls periodically (currently every 12 hours); this is not an insta
 
 Versioned releases are published to GitHub Container Registry as
 `ghcr.io/kuafeur/voxytok:<version>`, with `latest` pointing to the newest
-tagged release. The Pelican / Pterodactyl Egg uses this image. Keep
+tagged release. After the first package publication, set the GHCR package visibility to **Public** if Pelican nodes must pull it without registry credentials. The Pelican / Pterodactyl Egg uses this image. Keep
 `VOXYTOK_DATA_DIR` on persistent storage: it contains the embedded PostgreSQL
 cluster and must survive container restarts and image updates.
 
