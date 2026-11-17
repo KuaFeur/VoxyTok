@@ -1,6 +1,9 @@
 {
   "_comment": "VoxyTok - single-container Rust service with embedded PostgreSQL",
-  "meta": { "version": "PTDL_v2", "update_url": null },
+  "meta": {
+    "version": "PTDL_v2",
+    "update_url": null
+  },
   "exported_at": "2026-11-17T00:00:00+00:00",
   "name": "VoxyTok",
   "author": "Kua <https://github.com/KuaFeur>",
@@ -84,6 +87,16 @@
       "user_editable": false,
       "rules": "required|integer|between:1,65535",
       "field_type": "text"
+    },
+    {
+      "name": "API Bearer Token",
+      "description": "Secret used to authenticate management API requests. Generate at least 32 random characters.",
+      "env_variable": "API_TOKEN",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|min:32|max:256",
+      "field_type": "password"
     }
   ]
 }
