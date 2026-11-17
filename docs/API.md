@@ -61,7 +61,7 @@ On success, the browser receives a JSON response similar to:
 }
 ```
 
-The callback does not accept or store Discord-specific identifiers. The consuming application can poll the connection status below and map the returned creator ID to its own local user using the opaque reference.
+The success response tells the creator that the account is connected and that the page can be closed. The callback does not accept or store Discord-specific identifiers. The consuming application can poll the connection status below and map the returned creator ID to its own local user using the opaque reference.
 
 ### `GET /api/v1/oauth/tiktok/connections/{reference}`
 
