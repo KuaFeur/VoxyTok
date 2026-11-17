@@ -614,6 +614,9 @@ fn parse_video_page_response(
         anyhow::bail!("TikTok video.list failed with HTTP {status} (provider code: {code})");
     }
     let parsed: TikTokVideoListResponse = serde_json::from_value(payload)?;
+    if parsed.data.is_none() {
+        anyhow::bail!("TikTok video.list returned a successful response without data");
+    }
     if let Some(api_error) = &parsed.error
         && let Some(code) = api_error.code.as_deref().filter(|code| *code != "ok")
     {
@@ -1050,6 +1053,12 @@ mod tests {
             json!({"data": {"videos": [], "has_more": false}, "error": {"code": "ok"}}),
         ).unwrap();
         assert!(success.data.is_some());
+
+        let malformed_success = parse_video_page_response(
+            StatusCode::OK,
+            json!({"error": {"code": "ok"}}),
+        );
+        assert!(malformed_success.is_err());
     }
 
     #[test]
