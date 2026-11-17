@@ -452,7 +452,7 @@ async fn dispatch_loop(state: AppState) {
                 let mut request = state.http.post(&webhook_url).header("Content-Type","application/json")
                     .header("Idempotency-Key",delivery.id.to_string());
                 if let Some(secret)=&state.webhook_secret {
-                    let mut mac=HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key size");
+                    let mut mac=<HmacSha256 as Mac>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key size");
                     mac.update(&body);
                     request=request.header("X-VoxyTok-Signature",format!("sha256={}",hex::encode(mac.finalize().into_bytes())));
                 }
