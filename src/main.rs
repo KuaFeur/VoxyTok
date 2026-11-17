@@ -23,6 +23,7 @@ use uuid::Uuid;
 type HmacSha256 = Hmac<Sha256>;
 const TIKTOK_AUTHORIZE_URL: &str = "https://www.tiktok.com/v2/auth/authorize/";
 const TIKTOK_TOKEN_URL: &str = "https://open.tiktokapis.com/v2/oauth/token/";
+const TIKTOK_REVOKE_URL: &str = "https://open.tiktokapis.com/v2/oauth/revoke/";
 const TIKTOK_USER_INFO_URL: &str = "https://open.tiktokapis.com/v2/user/info/";
 const TIKTOK_VIDEO_LIST_URL: &str = "https://open.tiktokapis.com/v2/video/list/";
 const POLL_INTERVAL_HOURS: i64 = 12;
@@ -304,9 +305,75 @@ async fn list_creators(State(state): State<AppState>) -> Result<Json<Vec<Creator
     Ok(Json(creators))
 }
 
-async fn delete_creator(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<StatusCode, StatusCode> {
-    let result = sqlx::query("DELETE FROM creators WHERE id = $1").bind(id).execute(&state.db).await
-        .map_err(|error| { tracing::error!(%error, "could not delete creator"); StatusCode::INTERNAL_SERVER_ERROR })?;
+async fn delete_creator(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    let is_tiktok_creator: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM creators WHERE id=$1 AND tiktok_open_id IS NOT NULL)",
+    ).bind(id).fetch_one(&state.db).await
+        .map_err(|error| { tracing::error!(%error, "could not inspect creator before deletion"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    if !is_tiktok_creator {
+        let result = sqlx::query("DELETE FROM creators WHERE id = $1")
+            .bind(id).execute(&state.db).await
+            .map_err(|error| { tracing::error!(%error, "could not delete creator"); StatusCode::INTERNAL_SERVER_ERROR })?;
+        if result.rows_affected() == 0 { return Err(StatusCode::NOT_FOUND); }
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    let config = state.tiktok.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let mut creator = sqlx::query_as::<_, PollingCreator>(
+        "SELECT id,username,display_name,access_token_enc,refresh_token_enc,
+         access_expires_at,refresh_expires_at,last_polled_at FROM creators WHERE id=$1",
+    ).bind(id).fetch_optional(&state.db).await
+        .map_err(|error| { tracing::error!(%error, "could not load TikTok credentials for revocation"); StatusCode::INTERNAL_SERVER_ERROR })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let access_token = if creator.access_expires_at <= Utc::now()
+        && creator.refresh_expires_at > Utc::now()
+    {
+        match refresh_creator_token(&state, &mut creator, config).await {
+            Ok(token) => token,
+            Err(error) if is_reauthorization_required(&error) => {
+                tracing::info!(creator=%creator.username, "TikTok credentials were already revoked or expired");
+                String::new()
+            }
+            Err(error) => {
+                tracing::error!(%error, creator=%creator.username, "could not refresh token before revocation");
+                return Err(StatusCode::BAD_GATEWAY);
+            }
+        }
+    } else if creator.access_expires_at > Utc::now() {
+        decrypt_token(&config.encryption_key, &creator.access_token_enc)
+            .map_err(|error| { tracing::error!(%error, "could not decrypt TikTok token for revocation"); StatusCode::INTERNAL_SERVER_ERROR })?
+    } else {
+        String::new()
+    };
+
+    if !access_token.is_empty() {
+        let response = state.http.post(TIKTOK_REVOKE_URL)
+            .form(&[
+                ("client_key", config.client_key.as_str()),
+                ("client_secret", config.client_secret.as_str()),
+                ("token", access_token.as_str()),
+            ]).send().await
+            .map_err(|error| { tracing::error!(%error, "TikTok token revocation request failed"); StatusCode::BAD_GATEWAY })?;
+        let status = response.status();
+        let body = response.text().await
+            .map_err(|error| { tracing::error!(%error, "TikTok token revocation response failed"); StatusCode::BAD_GATEWAY })?;
+        let payload = if body.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str::<Value>(&body)
+                .map_err(|error| { tracing::error!(%error, "TikTok token revocation response was invalid"); StatusCode::BAD_GATEWAY })?
+        };
+        parse_tiktok_revoke_response(status, payload)
+            .map_err(|error| { tracing::error!(%error, creator=%creator.username, "TikTok token revocation was rejected"); StatusCode::BAD_GATEWAY })?;
+    }
+
+    let result = sqlx::query("DELETE FROM creators WHERE id = $1")
+        .bind(id).execute(&state.db).await
+        .map_err(|error| { tracing::error!(%error, "could not delete creator after TikTok revocation"); StatusCode::INTERNAL_SERVER_ERROR })?;
     if result.rows_affected() == 0 { return Err(StatusCode::NOT_FOUND); }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -643,6 +710,20 @@ fn parse_tiktok_user_info_response(
         anyhow::bail!("TikTok user.info returned an empty open_id");
     }
     Ok(user)
+}
+
+fn parse_tiktok_revoke_response(status: StatusCode, payload: Value) -> anyhow::Result<()> {
+    let code = provider_error_code(&payload).unwrap_or("unknown");
+    if status.is_success() {
+        if !code.is_empty() && code != "unknown" && code != "ok" {
+            anyhow::bail!("TikTok token revocation failed (provider code: {code})");
+        }
+        return Ok(());
+    }
+    if matches!(code, "invalid_token" | "invalid_grant" | "token_expired") {
+        return Ok(());
+    }
+    anyhow::bail!("TikTok token revocation failed with HTTP {status} (provider code: {code})");
 }
 
 fn parse_tiktok_token_response(
@@ -1197,6 +1278,28 @@ mod tests {
         assert!(is_new_publication(Some(overlapping_video), watermark));
         assert!(is_new_publication(Some(new_video), watermark));
         assert!(!is_new_publication(None, watermark));
+    }
+
+    #[test]
+    fn token_revocation_parser_accepts_success_and_already_revoked_tokens() {
+        assert!(parse_tiktok_revoke_response(StatusCode::OK, Value::Null).is_ok());
+        assert!(parse_tiktok_revoke_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "invalid_token"}),
+        ).is_ok());
+        assert!(parse_tiktok_revoke_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "invalid_grant"}),
+        ).is_ok());
+    }
+
+    #[test]
+    fn token_revocation_parser_preserves_credentials_on_transient_errors() {
+        let error = parse_tiktok_revoke_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": "server_error"}),
+        ).err().unwrap();
+        assert!(error.to_string().contains("503"));
     }
 
     #[test]
