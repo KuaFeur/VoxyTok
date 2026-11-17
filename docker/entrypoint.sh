@@ -33,7 +33,7 @@ mkdir -p "$DATA_DIR" "$PGDATA" /var/run/postgresql /var/log/postgresql
 chown -R postgres:postgres "$PGDATA" /var/run/postgresql /var/log/postgresql
 
 # Debian stores server binaries in a versioned directory, not on PATH.
-PG_BIN="$(find /usr/lib/postgresql -mindepth 2 -maxdepth 2 -type f -name initdb -printf '%h\\n' | sort -V | tail -n 1)"
+PG_BIN="$(find /usr/lib/postgresql -mindepth 3 -maxdepth 3 -type f -name initdb -printf '%h\\n' | sort -V | tail -n 1)"
 if [[ -z "$PG_BIN" ]]; then
   echo "Could not locate PostgreSQL server binaries." >&2
   exit 1
