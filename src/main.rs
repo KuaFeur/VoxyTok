@@ -645,6 +645,19 @@ fn is_reauthorization_required(error: &anyhow::Error) -> bool {
     error.to_string().starts_with("reauthorization_required:")
 }
 
+fn apply_refreshed_credentials(
+    creator: &mut PollingCreator,
+    access_token_enc: String,
+    refresh_token_enc: String,
+    access_expires_at: DateTime<Utc>,
+    refresh_expires_at: DateTime<Utc>,
+) {
+    creator.access_token_enc = access_token_enc;
+    creator.refresh_token_enc = refresh_token_enc;
+    creator.access_expires_at = access_expires_at;
+    creator.refresh_expires_at = refresh_expires_at;
+}
+
 async fn refresh_creator_token(state: &AppState, creator: &mut PollingCreator, config: &TikTokConfig) -> anyhow::Result<String> {
     let refresh_token=decrypt_token(&config.encryption_key,&creator.refresh_token_enc)?;
     let response=state.http.post(TIKTOK_TOKEN_URL)
@@ -681,10 +694,13 @@ async fn refresh_creator_token(state: &AppState, creator: &mut PollingCreator, c
         .execute(&state.db).await?;
     // Keep the in-memory copy in sync: a second refresh in this same poll
     // must use TikTok's rotated refresh token, never the now-stale one.
-    creator.access_token_enc=access_enc;
-    creator.refresh_token_enc=refresh_enc;
-    creator.access_expires_at=access_expires_at;
-    creator.refresh_expires_at=refresh_expires_at;
+    apply_refreshed_credentials(
+        creator,
+        access_enc,
+        refresh_enc,
+        access_expires_at,
+        refresh_expires_at,
+    );
     Ok(response.access_token)
 }
 
@@ -888,6 +904,37 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refreshed_credentials_replace_both_tokens_and_expiries_in_memory() {
+        let key = [11_u8; 32];
+        let mut creator = PollingCreator {
+            id: Uuid::new_v4(),
+            username: "test_creator".to_string(),
+            display_name: None,
+            access_token_enc: encrypt_token(&key, "old-access").unwrap(),
+            refresh_token_enc: encrypt_token(&key, "old-refresh").unwrap(),
+            access_expires_at: Utc::now(),
+            refresh_expires_at: Utc::now(),
+        };
+        let new_access = encrypt_token(&key, "new-access").unwrap();
+        let new_refresh = encrypt_token(&key, "rotated-refresh").unwrap();
+        let access_expiry = Utc::now() + ChronoDuration::hours(2);
+        let refresh_expiry = Utc::now() + ChronoDuration::days(180);
+
+        apply_refreshed_credentials(
+            &mut creator,
+            new_access,
+            new_refresh,
+            access_expiry,
+            refresh_expiry,
+        );
+
+        assert_eq!(decrypt_token(&key, &creator.access_token_enc).unwrap(), "new-access");
+        assert_eq!(decrypt_token(&key, &creator.refresh_token_enc).unwrap(), "rotated-refresh");
+        assert_eq!(creator.access_expires_at, access_expiry);
+        assert_eq!(creator.refresh_expires_at, refresh_expiry);
+    }
 
     #[test]
     fn token_encryption_round_trip_and_authentication() {
