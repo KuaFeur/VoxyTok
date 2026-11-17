@@ -146,6 +146,8 @@ struct TikTokVideoListResponse {
 #[derive(Deserialize)]
 struct TikTokVideoListData {
     videos: Option<Vec<TikTokVideo>>,
+    cursor: Option<i64>,
+    has_more: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -160,7 +162,7 @@ struct TikTokVideo {
     embed_link: Option<String>,
 }
 
-#[derive(FromRow)]
+#[derive(Clone, FromRow)]
 struct PollingCreator {
     id: Uuid,
     username: String,
@@ -427,11 +429,12 @@ async fn retry_delivery(State(state): State<AppState>, Path(id): Path<Uuid>) -> 
 }
 
 async fn claim_delivery(db: &PgPool) -> anyhow::Result<Option<ClaimedDelivery>> {
+    sqlx::query("UPDATE deliveries SET status='retry',next_attempt_at=NOW(),processing_started_at=NULL,last_error=COALESCE(last_error,'Recovered stale processing delivery') WHERE status='processing' AND processing_started_at < NOW()-INTERVAL '5 minutes'").execute(db).await?;
     Ok(sqlx::query_as::<_, ClaimedDelivery>(
         "WITH candidate AS (SELECT id FROM deliveries WHERE status IN ('pending','retry')
          AND next_attempt_at<=NOW() ORDER BY next_attempt_at,created_at
          FOR UPDATE SKIP LOCKED LIMIT 1)
-         UPDATE deliveries d SET status='processing',attempts=d.attempts+1
+         UPDATE deliveries d SET status='processing',attempts=d.attempts+1,processing_started_at=NOW()
          FROM candidate c,videos v WHERE d.id=c.id AND v.id=d.video_id
          RETURNING d.id,d.attempts,v.payload",
     ).fetch_optional(db).await?)
@@ -458,14 +461,14 @@ async fn dispatch_loop(state: AppState) {
                 }
                 let result=request.body(body).send().await.and_then(|response|response.error_for_status());
                 match result {
-                    Ok(_) => { let _=sqlx::query("UPDATE deliveries SET status='delivered',delivered_at=NOW(),last_error=NULL WHERE id=$1")
+                    Ok(_) => { let _=sqlx::query("UPDATE deliveries SET status='delivered',delivered_at=NOW(),last_error=NULL,processing_started_at=NULL WHERE id=$1")
                         .bind(delivery.id).execute(&state.db).await; }
                     Err(error) => {
                         let terminal=delivery.attempts>=10;
                         let delay=2_i64.pow(delivery.attempts.min(10) as u32).min(3600);
                         let status=if terminal {"failed"} else {"retry"};
                         let message=error.to_string().chars().take(1000).collect::<String>();
-                        let _=sqlx::query("UPDATE deliveries SET status=$2,last_error=$3,next_attempt_at=NOW()+($4*INTERVAL '1 second') WHERE id=$1")
+                        let _=sqlx::query("UPDATE deliveries SET status=$2,last_error=$3,next_attempt_at=NOW()+($4*INTERVAL '1 second'),processing_started_at=NULL WHERE id=$1")
                             .bind(delivery.id).bind(status).bind(message).bind(delay).execute(&state.db).await;
                     }
                 }
@@ -506,19 +509,24 @@ async fn poll_creator(state: &AppState, creator: PollingCreator, config: &TikTok
         decrypt_token(&config.encryption_key,&creator.access_token_enc)?
     };
 
-    let response: TikTokVideoListResponse=state.http.post(TIKTOK_VIDEO_LIST_URL)
-        .query(&[("fields","id,title,video_description,create_time,duration,cover_image_url,share_url,embed_link")])
-        .bearer_auth(&access_token)
-        .json(&json!({"max_count":20}))
-        .send().await?.error_for_status()?.json().await?;
-    if let Some(api_error)=response.error {
-        if api_error.code.as_deref().is_some_and(|code|code!="ok") {
+    let mut inserted_count=0usize;
+    let mut cursor: Option<i64>=None;
+    let mut pages_fetched=0usize;
+    loop {
+        pages_fetched+=1;
+        let mut body=json!({"max_count":20});
+        if let Some(value)=cursor { body["cursor"]=json!(value); }
+        let response: TikTokVideoListResponse=state.http.post(TIKTOK_VIDEO_LIST_URL)
+            .query(&[("fields","id,title,video_description,create_time,duration,cover_image_url,share_url,embed_link")])
+            .bearer_auth(&access_token).json(&body).send().await?
+            .error_for_status()?.json().await?;
+        if let Some(api_error)=response.error
+            && api_error.code.as_deref().is_some_and(|code|code!="ok") {
             anyhow::bail!("TikTok API error: {}",api_error.message.unwrap_or_default());
         }
-    }
-    let videos=response.data.and_then(|data|data.videos).unwrap_or_default();
-    let mut inserted_count=0usize;
-    for video in videos {
+        let Some(data)=response.data else { break; };
+        let videos=data.videos.unwrap_or_default();
+        for video in videos {
         let published_at=video.create_time.and_then(|timestamp|DateTime::from_timestamp(timestamp,0));
         let payload=json!({
             "event":"tiktok.video.published",
@@ -547,9 +555,15 @@ async fn poll_creator(state: &AppState, creator: PollingCreator, config: &TikTok
             inserted_count+=1;
         }
         tx.commit().await?;
+
+        }
+        if data.has_more != Some(true) || pages_fetched>=20 { break; }
+        let Some(next_cursor)=data.cursor else { break; };
+        if Some(next_cursor)==cursor { break; }
+        cursor=Some(next_cursor);
     }
-    sqlx::query("UPDATE creators SET last_polled_at=NOW(),last_error=NULL WHERE id=$1")
-        .bind(creator.id).execute(&state.db).await?;
+    sqlx::query("UPDATE creators SET last_polled_at=NOW(),next_poll_at=NOW()+($2*INTERVAL '1 hour'),poll_failures=0,last_error=NULL WHERE id=$1")
+        .bind(creator.id).bind(POLL_INTERVAL_HOURS).execute(&state.db).await?;
     tracing::info!(creator=%creator.username,new_videos=inserted_count,"TikTok creator synchronized");
     Ok(())
 }
@@ -564,15 +578,18 @@ async fn tiktok_poll_loop(state: AppState) {
             "SELECT id,username,display_name,access_token_enc,refresh_token_enc,
              access_expires_at,refresh_expires_at FROM creators
              WHERE enabled=TRUE AND tiktok_open_id IS NOT NULL
-             AND (last_polled_at IS NULL OR last_polled_at<=NOW()-INTERVAL '12 hours')
-             ORDER BY last_polled_at NULLS FIRST LIMIT 10",
-        ).fetch_all(&state.db).await;
+             AND ((next_poll_at IS NULL AND (last_polled_at IS NULL OR last_polled_at<=NOW()-($1*INTERVAL '1 hour'))) OR next_poll_at<=NOW())
+             ORDER BY COALESCE(next_poll_at,last_polled_at) NULLS FIRST LIMIT 10",
+        ).bind(POLL_INTERVAL_HOURS).fetch_all(&state.db).await;
         match creators {
             Ok(creators)=>{
                 for creator in creators {
-                    if let Err(error)=poll_creator(&state,creator,&config).await {
-                        tracing::error!(%error,"TikTok synchronization failed");
-                        // Do not mark as synchronized: retry on the next worker pass.
+                    if let Err(error)=poll_creator(&state,creator.clone(),&config).await {
+                        let message=error.to_string().chars().take(1000).collect::<String>();
+                        let persisted=sqlx::query("UPDATE creators SET poll_failures=poll_failures+1,next_poll_at=NOW()+make_interval(secs => LEAST(300 * (1 << LEAST(poll_failures,4)),3600)),last_error=$2 WHERE id=$1")
+                            .bind(creator.id).bind(&message).execute(&state.db).await;
+                        if let Err(db_error)=persisted { tracing::error!(%db_error,creator=%creator.username,"could not persist polling backoff"); }
+                        tracing::error!(%error,creator=%creator.username,"TikTok synchronization failed; retry scheduled");
                     }
                 }
             }
@@ -595,6 +612,7 @@ async fn main() -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!("../migrations/0001_initial.sql")).execute(&db).await?;
     sqlx::raw_sql(include_str!("../migrations/0002_single_instance_outbox.sql")).execute(&db).await?;
     sqlx::raw_sql(include_str!("../migrations/0003_tiktok_oauth.sql")).execute(&db).await?;
+    sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await?;
 
     let webhook_url=env::var("WEBHOOK_URL").ok().filter(|value|!value.trim().is_empty());
     if let Some(url)=&webhook_url {
@@ -670,6 +688,7 @@ mod tests {
         sqlx::raw_sql(include_str!("../migrations/0001_initial.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0002_single_instance_outbox.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0003_tiktok_oauth.sql")).execute(&db).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await.unwrap();
 
         let creator_id = Uuid::new_v4();
         let username = format!("ci_{}", Uuid::new_v4().simple());
