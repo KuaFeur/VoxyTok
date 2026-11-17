@@ -68,6 +68,14 @@ The provider polls periodically (currently every 12 hours); this is not an insta
 - Retry handling and recovery of deliveries interrupted by a process restart.
 - Rust API, Docker runtime and Pelican / Pterodactyl Egg.
 
+## Container image
+
+Versioned releases are published to GitHub Container Registry as
+`ghcr.io/kuafeur/voxytok:<version>`, with `latest` pointing to the newest
+tagged release. The Pelican / Pterodactyl Egg uses this image. Keep
+`VOXYTOK_DATA_DIR` on persistent storage: it contains the embedded PostgreSQL
+cluster and must survive container restarts and image updates.
+
 ## Quick start
 
 1. Deploy VoxyTok and persist `VOXYTOK_DATA_DIR`.
