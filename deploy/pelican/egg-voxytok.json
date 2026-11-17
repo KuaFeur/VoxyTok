@@ -1,5 +1,5 @@
 {
-  "_comment": "VoxyTok - single-container Rust service with embedded PostgreSQL",
+  "_comment": "VoxyTok - one isolated instance for one bot/application, with embedded PostgreSQL",
   "meta": {
     "version": "PTDL_v2",
     "update_url": null
@@ -7,7 +7,7 @@
   "exported_at": "2026-11-17T00:00:00+00:00",
   "name": "VoxyTok",
   "author": "Kua <https://github.com/KuaFeur>",
-  "description": "TikTok publication event gateway. Rust and PostgreSQL are bundled in one container.",
+  "description": "Self-hosted TikTok event gateway. One instance is dedicated to one bot and one webhook destination.",
   "features": null,
   "docker_images": {
     "ghcr.io/kuafeur/voxytok:latest": "ghcr.io/kuafeur/voxytok:latest"
@@ -49,13 +49,33 @@
       "field_type": "text"
     },
     {
+      "name": "Bot Webhook URL",
+      "description": "The single webhook destination for the bot attached to this VoxyTok instance.",
+      "env_variable": "WEBHOOK_URL",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|url|max:2048",
+      "field_type": "text"
+    },
+    {
+      "name": "Webhook Signing Secret",
+      "description": "Optional HMAC-SHA256 secret used to sign outgoing webhook requests.",
+      "env_variable": "WEBHOOK_SECRET",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|min:32|max:256",
+      "field_type": "password"
+    },
+    {
       "name": "PostgreSQL Database",
       "description": "Local database name inside the container.",
       "env_variable": "POSTGRES_DB",
       "default_value": "voxytok",
       "user_viewable": false,
       "user_editable": true,
-      "rules": "required|string|alpha_dash|max:63",
+      "rules": "required|alpha_dash|max:63",
       "field_type": "text"
     },
     {
@@ -65,17 +85,17 @@
       "default_value": "voxytok",
       "user_viewable": false,
       "user_editable": true,
-      "rules": "required|string|alpha_dash|max:63",
+      "rules": "required|alpha_dash|max:63",
       "field_type": "text"
     },
     {
       "name": "PostgreSQL Password",
-      "description": "Set a strong password. PostgreSQL is bound to localhost only.",
+      "description": "Use 24-128 random URL-safe characters: letters, digits, underscore or hyphen.",
       "env_variable": "POSTGRES_PASSWORD",
       "default_value": "",
       "user_viewable": false,
       "user_editable": true,
-      "rules": "required|string|min:24|max:128",
+      "rules": "required|regex:/^[A-Za-z0-9_-]{24,128}$/",
       "field_type": "password"
     },
     {

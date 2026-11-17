@@ -1,4 +1,5 @@
--- VoxyTok initial relational schema.
+-- One VoxyTok deployment belongs to exactly one consuming bot/application.
+-- Every creator and delivery stored here belongs to that single instance.
 CREATE TABLE IF NOT EXISTS creators (
     id UUID PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
@@ -6,18 +7,6 @@ CREATE TABLE IF NOT EXISTS creators (
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-CREATE TABLE IF NOT EXISTS subscriptions (
-    id UUID PRIMARY KEY,
-    creator_id UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL,
-    secret_hash TEXT NOT NULL,
-    enabled BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS subscriptions_creator_enabled_idx
-    ON subscriptions (creator_id) WHERE enabled = TRUE;
 
 CREATE TABLE IF NOT EXISTS videos (
     id UUID PRIMARY KEY,
@@ -31,16 +20,16 @@ CREATE TABLE IF NOT EXISTS videos (
 
 CREATE TABLE IF NOT EXISTS deliveries (
     id UUID PRIMARY KEY,
-    subscription_id UUID NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
-    video_id UUID NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
-    status TEXT NOT NULL DEFAULT 'pending',
-    attempts INTEGER NOT NULL DEFAULT 0,
+    video_id UUID NOT NULL UNIQUE REFERENCES videos(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'processing', 'retry', 'delivered', 'failed')),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    delivered_at TIMESTAMPTZ,
-    UNIQUE (subscription_id, video_id)
+    delivered_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS deliveries_pending_idx
-    ON deliveries (next_attempt_at) WHERE status IN ('pending', 'retry');
+    ON deliveries (next_attempt_at, created_at)
+    WHERE status IN ('pending', 'retry');

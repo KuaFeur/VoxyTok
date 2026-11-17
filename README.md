@@ -2,9 +2,9 @@
 
 # VoxyTok
 
-### TikTok publications. Delivered to your webhook.
+### TikTok publications. Delivered to your bot.
 
-A self-hosted, destination-agnostic TikTok event service written in Rust. VoxyTok monitors configured public creator profiles, normalizes new-publication events and delivers them to any HTTP endpoint.
+A self-hosted TikTok event gateway written in Rust. VoxyTok monitors public creator profiles and sends normalized publication events to the webhook of the bot/application attached to that instance.
 
 [![Rust](https://img.shields.io/badge/built%20with-Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Docker](https://img.shields.io/badge/container-GHCR-2496ED?logo=docker)](https://github.com/KuaFeur/VoxyTok/pkgs/container/voxytok)
@@ -14,95 +14,128 @@ A self-hosted, destination-agnostic TikTok event service written in Rust. VoxyTo
 
 ---
 
-## What is VoxyTok?
+## The instance model
 
-VoxyTok is an independent event gateway. It is not tied to Voxy, Discord or any specific bot. Any application that can call an HTTP API or receive webhooks can use it.
+**One VoxyTok instance = one bot or application.**
 
-The service is designed around the same operational model as [VoxyTube](https://github.com/KuaFeur/Voxytube): a standalone Rust service, durable PostgreSQL storage, authenticated management API, normalized events, retryable webhook delivery and a Pelican / Pterodactyl deployment option.
+VoxyTok is generic and open source: any developer can deploy their own instance and connect it to their own bot. Each deployment has its own database, creator list, API token and webhook destination.
 
-## Design goals
+There is no shared multi-tenant service, no cross-customer subscriptions and no fan-out between unrelated bots. Data and events stay inside the instance operated for that bot.
 
-- **Destination-agnostic:** no Discord-specific code or assumptions.
-- **One monitored profile, many consumers:** creator monitoring is centralized; consumers subscribe to events independently.
-- **Durable:** persist publication identity before attempting delivery.
-- **Idempotent:** never emit the same publication twice to the same subscription.
-- **Honest delivery semantics:** at-least-once webhook delivery with an idempotency key.
-- **Self-hosted:** Docker image and Pelican / Pterodactyl Egg.
-- **Provider isolation:** TikTok data acquisition is behind a provider interface so it can be replaced without changing the public API.
+## Capabilities
 
-## Important platform limitation
+- **Bot-agnostic:** the consumer can be a Discord bot, a website, or any HTTP application.
+- **Single destination per instance:** one configured webhook receives events for the bot attached to that deployment.
+- **Durable event pipeline:** publications are persisted and deduplicated before delivery.
+- **Retryable delivery:** transient webhook failures are retried with exponential backoff.
+- **Idempotency:** each delivery carries a stable `Idempotency-Key`.
+- **Signed webhooks:** optional HMAC-SHA256 signature via `X-VoxyTok-Signature`.
+- **Self-hosted:** Docker image and Pelican / Pterodactyl Egg with PostgreSQL bundled in the container.
+- **Provider isolation:** TikTok acquisition can be implemented or replaced without changing the consumer API.
 
-TikTok does not currently provide a general-purpose public push feed equivalent to YouTube WebSub for arbitrary public creators. VoxyTok therefore cannot promise YouTube-style instant push notifications for every TikTok profile.
+## TikTok acquisition status and limitations
 
-The acquisition provider must be selected and validated against TikTok's current access rules, reliability, rate limits and operational constraints. VoxyTok will not silently depend on browser automation, login-cookie harvesting or an undocumented endpoint while presenting it as a stable official API.
+TikTok does not offer a general-purpose public push feed equivalent to YouTube WebSub for arbitrary public creator profiles. VoxyTok therefore does not claim instant notifications or universal profile coverage.
 
-The service will expose provider health and observation timestamps so consumers can distinguish a newly detected publication from its original TikTok publication time.
+The current milestone implements the management API, durable event ingestion, deduplication and webhook delivery pipeline. The TikTok acquisition provider is a separate integration milestone and must be validated against current access rules, rate limits and reliability. VoxyTok will not silently depend on browser automation, harvested login cookies or an undocumented endpoint while presenting it as a stable official API.
 
-## Planned architecture
+Until a provider is integrated, events can be submitted to the authenticated ingestion endpoint by a provider adapter or test harness.
+
+## Architecture
 
 ```mermaid
 flowchart TD
-    T[TikTok public creator profiles] --> P[Acquisition provider]
+    T[TikTok public creator profiles] --> P[Future acquisition provider]
     P --> N[Normalize publication]
     N --> D[PostgreSQL deduplication]
     D --> O[Durable delivery outbox]
     O --> W[Webhook dispatcher]
-    W --> C[Any HTTP consumer]
-    API[Management REST API] --> D
+    W --> B[The bot attached to this instance]
+    API[Instance management API] --> D
 ```
 
-PostgreSQL is the durable source of truth and stores creators, subscriptions, observed publications and delivery attempts. The first implementation follows VoxyTube's embedded-PostgreSQL container model; a Redis dependency will not be added unless the implementation demonstrates a concrete need for it.
+Each deployment runs one VoxyTok API and one webhook dispatcher. PostgreSQL is the durable source of truth. Redis is intentionally not required: the database outbox is sufficient for the current single-instance worker model.
 
-## Planned API
+## API
 
-Implemented management endpoints use `Authorization: Bearer <API_TOKEN>`. The initial API slice supports creator registration, listing and removal. Subscription management, event inspection and delivery retry are still planned.
+All management endpoints require `Authorization: Bearer <API_TOKEN>`.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/v1/creators` | Register a TikTok creator — implemented |
-| `GET` | `/api/v1/creators` | List monitored creators — implemented |
-| `DELETE` | `/api/v1/creators/{id}` | Remove a creator — implemented |
-| `POST` | `/api/v1/subscriptions` | Subscribe a webhook to creator events |
-| `GET` | `/api/v1/subscriptions` | List webhook subscriptions |
-| `DELETE` | `/api/v1/subscriptions/{id}` | Remove a webhook subscription |
-| `GET` | `/api/v1/events` | Inspect observed publications and deliveries |
+| `POST` | `/api/v1/creators` | Add a TikTok creator to this bot's watch list |
+| `GET` | `/api/v1/creators` | List this instance's creators |
+| `DELETE` | `/api/v1/creators/{id}` | Stop monitoring and remove a creator |
+| `POST` | `/api/v1/events` | Ingest a normalized publication event |
+| `GET` | `/api/v1/events` | Inspect the latest 100 events and delivery states |
 | `POST` | `/api/v1/events/{id}/retry` | Retry a failed delivery |
 | `GET` | `/healthz` | Liveness check |
-| `GET` | `/readyz` | Readiness check |
+| `GET` | `/readyz` | Database readiness check |
 
-The API contract will be finalized alongside the implementation and documented in the GitBook.
+### Register a creator
 
-## Webhook event
-
-The normalized event contract is planned to be platform-neutral where possible while retaining TikTok-specific metadata:
-
-```json
-{
-  "event": "tiktok.video.published",
-  "event_id": "evt_...",
-  "creator": {
-    "username": "creator",
-    "display_name": "Creator"
-  },
-  "video": {
-    "id": "video_id",
-    "description": "New video",
-    "url": "https://www.tiktok.com/@creator/video/video_id",
-    "cover_url": null,
-    "published_at": null
-  },
-  "detected_at": "2026-01-01T12:00:00Z",
-  "source": "provider"
-}
+```bash
+curl -X POST http://localhost:8080/api/v1/creators \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"tiktok_creator"}'
 ```
 
-Exact optional fields depend on what the selected acquisition provider can reliably supply. Missing metadata will be represented as `null`, not fabricated.
+### Submit a normalized publication
 
-Each webhook delivery will include an `Idempotency-Key`. Delivery is at-least-once: consumers should deduplicate using that key.
+This endpoint is intended for the acquisition adapter and integration tests. It is not a replacement for the TikTok provider itself.
 
-## Deployment
+```bash
+curl -X POST http://localhost:8080/api/v1/events \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "creator_id":"CREATOR_UUID",
+    "platform_video_id":"7350000000000000000",
+    "published_at":null,
+    "payload":{
+      "event":"tiktok.video.published",
+      "creator":{"username":"tiktok_creator"},
+      "video":{
+        "id":"7350000000000000000",
+        "url":"https://www.tiktok.com/@tiktok_creator/video/7350000000000000000"
+      }
+    }
+  }'
+```
 
-A Pelican / Pterodactyl Egg and a Docker image are part of the project deliverables.
+A duplicate `(creator_id, platform_video_id)` is acknowledged without creating another delivery.
+
+## Webhook contract
+
+VoxyTok forwards the normalized JSON payload supplied by the provider adapter. It adds:
+
+- `Content-Type: application/json`
+- `Idempotency-Key: <delivery UUID>`
+- `X-VoxyTok-Signature: sha256=<hex HMAC>` when `WEBHOOK_SECRET` is configured.
+
+The signature is HMAC-SHA256 over the exact HTTP request body. Consumers should compare signatures in constant time and deduplicate using the idempotency key.
+
+Delivery is at-least-once. Failed requests are retried with exponential backoff, capped at one hour; after ten failed attempts the delivery is marked `failed` and can be manually retried.
+
+## Configuration
+
+Copy `.env.example` and configure at least:
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `API_TOKEN` | Yes | Management API bearer token, minimum 32 characters |
+| `WEBHOOK_URL` | For delivery | The one webhook belonging to this bot instance |
+| `WEBHOOK_SECRET` | No | HMAC-SHA256 signing secret |
+| `POSTGRES_PASSWORD` | Yes | Local embedded PostgreSQL password |
+| `POSTGRES_DB` | No | Database name |
+| `POSTGRES_USER` | No | Database user |
+| `POSTGRES_PORT` | No | Internal PostgreSQL port, not public |
+| `PORT` | No | HTTP port, defaults to 8080 |
+| `VOXYTOK_DATA_DIR` | No | Persistent data directory |
+
+The webhook worker remains disabled when `WEBHOOK_URL` is empty. PostgreSQL listens on localhost inside the container and must not be exposed publicly.
+
+## Docker and Pelican / Pterodactyl
 
 Planned image:
 
@@ -110,11 +143,24 @@ Planned image:
 ghcr.io/kuafeur/voxytok:latest
 ```
 
-The container bundles the Rust service and PostgreSQL, following VoxyTube's single-container deployment convention. Persist the application data directory; do not expose PostgreSQL's internal port publicly. Configure `API_TOKEN` with at least 32 random characters and set a strong `POSTGRES_PASSWORD`.
+The container bundles the Rust service and PostgreSQL. Persist `VOXYTOK_DATA_DIR` across restarts and upgrades. Import `deploy/pelican/egg-voxytok.json` into Pelican / Pterodactyl and allocate only the HTTP port.
 
 ## Project status
 
-VoxyTok is at the initial implementation stage. The API, provider, migrations, delivery worker, Docker image, Egg, automated tests and operational documentation must be completed and validated before a production-ready release is claimed.
+Implemented in the current development milestone:
+- Authenticated creator management API.
+- PostgreSQL schema and durable publication deduplication.
+- Authenticated event ingestion endpoint.
+- Single-destination webhook dispatcher.
+- HMAC-SHA256 signatures, idempotency keys and retry queue.
+- Docker runtime with embedded PostgreSQL and Pelican Egg configuration.
+- CI checks for formatting, compilation, tests and linting.
+
+Still required before a production release:
+- A reliable, compliant TikTok acquisition provider.
+- Integration tests against a real PostgreSQL instance and webhook receiver.
+- End-to-end container and Egg validation.
+- GitBook documentation and release hardening.
 
 ## License
 
