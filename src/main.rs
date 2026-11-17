@@ -93,7 +93,27 @@ struct ClaimedDelivery {
 #[derive(Serialize)]
 struct OAuthStartResponse {
     authorization_url: String,
+    reference: String,
     expires_in_seconds: u64,
+}
+
+#[derive(Deserialize)]
+struct OAuthStartRequest {
+    reference: String,
+}
+
+#[derive(Serialize)]
+struct OAuthConnectionStatus {
+    status: String,
+    creator_id: Option<Uuid>,
+    display_name: Option<String>,
+    expires_at: DateTime<Utc>,
+}
+
+#[derive(FromRow)]
+struct ConsumedOAuthState {
+    state_hash: String,
+    client_reference_hash: String,
 }
 
 #[derive(Deserialize)]
@@ -285,16 +305,30 @@ async fn delete_creator(State(state): State<AppState>, Path(id): Path<Uuid>) -> 
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn start_tiktok_oauth(State(state): State<AppState>) -> Result<Json<OAuthStartResponse>, StatusCode> {
+async fn start_tiktok_oauth(
+    State(state): State<AppState>,
+    Json(input): Json<OAuthStartRequest>,
+) -> Result<Json<OAuthStartResponse>, StatusCode> {
     let config = state.tiktok.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    if input.reference.len() < 32 || input.reference.len() > 128
+        || !input.reference.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // Keep only a digest of the consuming application's opaque correlation token.
+    let reference_hash = hash_state(&input.reference);
     let state_token = Uuid::new_v4().to_string() + &Uuid::new_v4().simple().to_string();
-    sqlx::query("DELETE FROM oauth_states WHERE expires_at <= NOW()")
+    sqlx::query("DELETE FROM oauth_states WHERE expires_at < NOW() - INTERVAL '1 day'")
         .execute(&state.db).await
-        .map_err(|error| { tracing::error!(%error, "could not clean expired OAuth states"); StatusCode::INTERNAL_SERVER_ERROR })?;
+        .map_err(|error| { tracing::error!(%error, "could not clean old OAuth states"); StatusCode::INTERNAL_SERVER_ERROR })?;
     sqlx::query(
-        "INSERT INTO oauth_states (state_hash, expires_at) VALUES ($1, NOW() + INTERVAL '10 minutes')",
-    ).bind(hash_state(&state_token)).execute(&state.db).await
-        .map_err(|error| { tracing::error!(%error, "could not persist OAuth state"); StatusCode::INTERNAL_SERVER_ERROR })?;
+        "INSERT INTO oauth_states (state_hash, client_reference_hash, expires_at)
+         VALUES ($1,$2,NOW()+INTERVAL '10 minutes')",
+    ).bind(hash_state(&state_token)).bind(reference_hash).execute(&state.db).await
+        .map_err(|error| {
+            tracing::error!(%error, "could not persist OAuth state");
+            StatusCode::CONFLICT
+        })?;
 
     let mut url = Url::parse(TIKTOK_AUTHORIZE_URL).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     url.query_pairs_mut()
@@ -306,6 +340,7 @@ async fn start_tiktok_oauth(State(state): State<AppState>) -> Result<Json<OAuthS
         .append_pair("disable_auto_auth", "1");
     Ok(Json(OAuthStartResponse {
         authorization_url: url.to_string(),
+        reference: input.reference,
         expires_in_seconds: 600,
     }))
 }
@@ -315,21 +350,49 @@ async fn tiktok_callback(
     Query(callback): Query<OAuthCallback>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let config = state.tiktok.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let consumed = sqlx::query_scalar::<_, String>(
-        "DELETE FROM oauth_states WHERE state_hash = $1 AND expires_at > NOW() RETURNING state_hash",
+    let consumed = sqlx::query_as::<_, ConsumedOAuthState>(
+        "UPDATE oauth_states SET consumed_at=NOW(),status='processing'
+         WHERE state_hash=$1 AND expires_at>NOW() AND consumed_at IS NULL
+         RETURNING state_hash,client_reference_hash",
     ).bind(hash_state(&callback.state)).fetch_optional(&state.db).await
         .map_err(|error| { tracing::error!(%error, "could not consume OAuth state"); StatusCode::INTERNAL_SERVER_ERROR })?;
-    if consumed.is_none() { return Err(StatusCode::BAD_REQUEST); }
-    if callback.error.is_some() {
-        tracing::warn!(error = ?callback.error, description = ?callback.error_description, "TikTok authorization was declined");
-        return Ok((StatusCode::BAD_REQUEST, Json(json!({"connected":false,"message":"TikTok authorization was declined"}))));
+    let Some(consumed) = consumed else { return Err(StatusCode::BAD_REQUEST); };
+
+    let result = complete_tiktok_authorization(&state, config, &callback).await;
+    match result {
+        Ok((creator_id, display_name)) => {
+            sqlx::query("UPDATE oauth_states SET status='connected',creator_id=$2 WHERE state_hash=$1")
+                .bind(&consumed.state_hash).bind(creator_id).execute(&state.db).await
+                .map_err(|error| { tracing::error!(%error, "could not finalize OAuth connection"); StatusCode::INTERNAL_SERVER_ERROR })?;
+            Ok((StatusCode::OK, Json(json!({
+                "connected": true,
+                "display_name": display_name,
+                "message": "TikTok account connected. You can close this page."
+            }))))
+        }
+        Err(status) => {
+            let _ = sqlx::query("UPDATE oauth_states SET status='failed' WHERE state_hash=$1")
+                .bind(&consumed.state_hash).execute(&state.db).await;
+            Err(status)
+        }
     }
-    let code = callback.code.ok_or(StatusCode::BAD_REQUEST)?;
+}
+
+async fn complete_tiktok_authorization(
+    state: &AppState,
+    config: &TikTokConfig,
+    callback: &OAuthCallback,
+) -> Result<(Uuid, Option<String>), StatusCode> {
+    if callback.error.is_some() {
+        tracing::warn!(error=?callback.error, description=?callback.error_description, "TikTok authorization was declined");
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let code = callback.code.as_deref().ok_or(StatusCode::BAD_REQUEST)?;
     let token: TikTokTokenResponse = state.http.post(TIKTOK_TOKEN_URL)
         .form(&[
             ("client_key", config.client_key.as_str()),
             ("client_secret", config.client_secret.as_str()),
-            ("code", code.as_str()),
+            ("code", code),
             ("grant_type", "authorization_code"),
             ("redirect_uri", config.redirect_uri.as_str()),
         ]).send().await.map_err(|error| {
@@ -346,9 +409,9 @@ async fn tiktok_callback(
     let user: TikTokUserInfoResponse = state.http.get(TIKTOK_USER_INFO_URL)
         .query(&[("fields", "open_id,display_name")])
         .bearer_auth(&token.access_token).send().await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?.error_for_status()
-        .map_err(|_| StatusCode::BAD_GATEWAY)?.json().await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        .map_err(|error| { tracing::error!(%error, "TikTok user info request failed"); StatusCode::BAD_GATEWAY })?
+        .error_for_status().map_err(|error| { tracing::error!(%error, "TikTok user info rejected"); StatusCode::BAD_GATEWAY })?
+        .json().await.map_err(|error| { tracing::error!(%error, "TikTok user info response invalid"); StatusCode::BAD_GATEWAY })?;
     if let Some(api_error) = user.error {
         tracing::error!(code=?api_error.code, message=?api_error.message, "TikTok user info failed");
         return Err(StatusCode::BAD_GATEWAY);
@@ -363,26 +426,39 @@ async fn tiktok_callback(
     let username = format!("tt_{}", profile.open_id.replace('-', ""));
     let access_expiry = Utc::now() + ChronoDuration::seconds(token.expires_in.max(60));
     let refresh_expiry = Utc::now() + ChronoDuration::seconds(token.refresh_expires_in.max(60));
-    sqlx::query(
+    let creator_id = sqlx::query_scalar::<_,Uuid>(
         "INSERT INTO creators
-            (id, username, display_name, tiktok_open_id, access_token_enc, refresh_token_enc,
-             access_expires_at, refresh_expires_at, enabled, last_polled_at)
+            (id,username,display_name,tiktok_open_id,access_token_enc,refresh_token_enc,
+             access_expires_at,refresh_expires_at,enabled,last_polled_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,NULL)
          ON CONFLICT (tiktok_open_id) DO UPDATE SET
-            username=EXCLUDED.username, display_name=EXCLUDED.display_name,
-            access_token_enc=EXCLUDED.access_token_enc, refresh_token_enc=EXCLUDED.refresh_token_enc,
-            access_expires_at=EXCLUDED.access_expires_at, refresh_expires_at=EXCLUDED.refresh_expires_at,
-            enabled=TRUE, last_polled_at=NULL",
+            username=EXCLUDED.username,display_name=EXCLUDED.display_name,
+            access_token_enc=EXCLUDED.access_token_enc,refresh_token_enc=EXCLUDED.refresh_token_enc,
+            access_expires_at=EXCLUDED.access_expires_at,refresh_expires_at=EXCLUDED.refresh_expires_at,
+            enabled=TRUE,last_polled_at=NULL,next_poll_at=NULL,poll_failures=0,last_error=NULL
+         RETURNING id",
     ).bind(Uuid::new_v4()).bind(username).bind(profile.display_name.clone())
         .bind(profile.open_id).bind(access_enc).bind(refresh_enc)
-        .bind(access_expiry).bind(refresh_expiry).execute(&state.db).await
+        .bind(access_expiry).bind(refresh_expiry).fetch_one(&state.db).await
         .map_err(|error| { tracing::error!(%error, "could not store authorized TikTok creator"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    Ok((creator_id, profile.display_name))
+}
 
-    Ok((StatusCode::OK, Json(json!({
-        "connected": true,
-        "display_name": profile.display_name,
-        "message": "TikTok account connected. The first synchronization will start shortly."
-    }))))
+async fn get_tiktok_connection(
+    State(state): State<AppState>,
+    Path(reference): Path<String>,
+) -> Result<Json<OAuthConnectionStatus>, StatusCode> {
+    if reference.len() < 32 || reference.len() > 128
+        || !reference.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let connection = sqlx::query_as::<_, OAuthConnectionStatus>(
+        "SELECT s.status,s.creator_id,c.display_name,s.expires_at
+         FROM oauth_states s LEFT JOIN creators c ON c.id=s.creator_id
+         WHERE s.client_reference_hash=$1",
+    ).bind(hash_state(&reference)).fetch_optional(&state.db).await
+        .map_err(|error| { tracing::error!(%error, "could not fetch OAuth connection status"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    connection.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
 async fn ingest_event(
@@ -675,6 +751,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/events",post(ingest_event).get(list_events))
         .route("/events/{id}/retry",post(retry_delivery))
         .route("/oauth/tiktok/start",post(start_tiktok_oauth))
+        .route("/oauth/tiktok/connections/{reference}",get(get_tiktok_connection))
         .route_layer(middleware::from_fn_with_state(state.clone(),authenticate));
     let app=Router::new()
         .route("/healthz",get(health))
@@ -716,6 +793,7 @@ mod tests {
         sqlx::raw_sql(include_str!("../migrations/0002_single_instance_outbox.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0003_tiktok_oauth.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0005_oauth_connection_tracking.sql")).execute(&db).await.unwrap();
 
         let creator_id = Uuid::new_v4();
         let username = format!("ci_{}", Uuid::new_v4().simple());
@@ -745,6 +823,15 @@ mod tests {
         assert_eq!(delivery_count,1);
         sqlx::query("DELETE FROM creators WHERE id=$1").bind(creator_id).execute(&db).await.unwrap();
         db.close().await;
+    }
+
+    #[test]
+    fn oauth_reference_validation_rejects_short_or_unsafe_values() {
+        let valid = "a".repeat(48);
+        assert!(valid.len() >= 32 && valid.len() <= 128
+            && valid.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'));
+        assert!(!"short".bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') || "short".len() < 32);
+        assert!("contains/slash________________________".bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') == false);
     }
 
     #[test]

@@ -36,7 +36,16 @@ paths:
   /api/v1/oauth/tiktok/start:
     post:
       summary: Start TikTok Login Kit authorization
-      description: Creates a one-time OAuth state. Send the returned URL to the creator. The URL expires after ten minutes.
+      description: Creates a one-time OAuth state bound to a caller-generated opaque reference. The URL expires after ten minutes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reference]
+              properties:
+                reference: { type: string, minLength: 32, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" }
       responses:
         "200":
           description: Authorization URL created
@@ -47,8 +56,32 @@ paths:
                 required: [authorization_url, expires_in_seconds]
                 properties:
                   authorization_url: { type: string, format: uri }
+                  reference: { type: string }
                   expires_in_seconds: { type: integer, const: 600 }
         "503": { description: TikTok provider is not configured }
+  /api/v1/oauth/tiktok/connections/{reference}:
+    get:
+      summary: Get OAuth connection status
+      description: Looks up the SHA-256 digest of the caller-generated opaque reference. The raw reference is never stored.
+      parameters:
+        - in: path
+          name: reference
+          required: true
+          schema: { type: string, minLength: 32, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" }
+      responses:
+        "200":
+          description: Connection state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, expires_at]
+                properties:
+                  status: { type: string, enum: [pending, processing, connected, failed] }
+                  creator_id: { type: [string, "null"], format: uuid }
+                  display_name: { type: [string, "null"] }
+                  expires_at: { type: string, format: date-time }
+        "404": { description: Reference not found }
   /oauth/tiktok/callback:
     get:
       security: []

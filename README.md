@@ -39,12 +39,13 @@ flowchart TD
     W --> A[One attached bot or application]
 ```
 
-1. The application asks VoxyTok for a TikTok authorization URL.
-2. The creator opens the link and authorizes their own TikTok account.
-3. VoxyTok stores encrypted OAuth tokens and refreshes them when required.
-4. VoxyTok periodically checks the authorized account's videos through the official Display API.
-5. New videos are deduplicated, persisted and delivered to the application's webhook.
-6. The application decides what to do: post a Discord message, notify a Telegram chat, update a website, etc.
+1. The application creates a cryptographically random, opaque reference and stores its own association (for example, the app's local user ID).
+2. The application sends that reference to VoxyTok when requesting a TikTok authorization URL.
+3. The creator opens the link and authorizes their own TikTok account.
+4. VoxyTok stores encrypted OAuth tokens and binds the connected creator to the reference digest.
+5. The application polls the connection-status endpoint using the same reference and receives the VoxyTok creator ID.
+6. VoxyTok periodically checks the authorized account's videos and delivers new publications to the application's webhook.
+7. The application decides what to do: post a Discord message, notify a Telegram chat, update a website, etc.
 
 ## TikTok API limitations
 
@@ -74,7 +75,7 @@ The provider polls periodically (currently every 12 hours); this is not an insta
 3. Create a TikTok developer application with Login Kit and Display API enabled.
 4. Register the exact HTTPS callback URL configured in `TIKTOK_REDIRECT_URI`.
 5. Set `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_REDIRECT_URI` and a persistent `TOKEN_ENCRYPTION_KEY`.
-6. From your application backend, call `POST /api/v1/oauth/tiktok/start` with the VoxyTok bearer token and send the returned authorization URL to the creator.
+6. From your application backend, generate a random reference (at least 32 URL-safe characters), store its mapping to your own local user/session, then call `POST /api/v1/oauth/tiktok/start` with `{"reference":"..."}`. Send the returned authorization URL to the creator. Poll `GET /api/v1/oauth/tiktok/connections/{reference}` to retrieve the connected creator ID.
 7. Receive publication events at the one `WEBHOOK_URL` configured for this VoxyTok instance.
 
 Never expose `API_TOKEN`, TikTok client secrets or `TOKEN_ENCRYPTION_KEY` to end users or browser JavaScript.
@@ -87,7 +88,8 @@ All `/api/v1/*` management endpoints require `Authorization: Bearer <API_TOKEN>`
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/v1/oauth/tiktok/start` | Create an authorization URL |
+| `POST` | `/api/v1/oauth/tiktok/start` | Create an authorization URL linked to an opaque app reference |
+| `GET` | `/api/v1/oauth/tiktok/connections/{reference}` | Check the connection status and retrieve the creator ID |
 | `GET` | `/oauth/tiktok/callback` | TikTok OAuth callback (public, state-validated) |
 | `GET` | `/api/v1/creators` | List creators connected to this instance |
 | `POST` | `/api/v1/creators` | Create a local, manually managed creator record |
@@ -98,7 +100,7 @@ All `/api/v1/*` management endpoints require `Authorization: Bearer <API_TOKEN>`
 | `GET` | `/healthz` | Liveness check |
 | `GET` | `/readyz` | Database readiness check |
 
-The OAuth callback returns a JSON confirmation to the browser. The connected creator appears in `GET /api/v1/creators`. A bot does not need to send Discord identifiers to VoxyTok: it can simply present the authorization link and process subsequent webhook events.
+The OAuth callback returns a JSON confirmation to the browser. The application can poll the protected connection-status endpoint using its opaque reference to retrieve the creator ID. VoxyTok stores only the reference digest; the consuming app retains the mapping to its own local user. No Discord identifiers or other platform-specific identity fields enter VoxyTok.
 
 ## Webhook contract
 

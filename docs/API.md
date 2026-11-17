@@ -24,13 +24,15 @@ Checks PostgreSQL and returns HTTP 503 when the database cannot be reached.
 
 ### `POST /api/v1/oauth/tiktok/start`
 
-Creates a one-time OAuth state and returns the TikTok authorization URL. No request body is required.
+Creates a one-time OAuth state and binds it to a caller-generated opaque reference. The reference must be 32-128 URL-safe characters and should be generated with a cryptographically secure random generator. Store its mapping to the consuming application's own user/session before returning the authorization URL to the user.
 
 Example:
 
 ```bash
 curl -X POST "$VOXYTOK_URL/api/v1/oauth/tiktok/start" \
-  -H "Authorization: Bearer $VOXYTOK_API_TOKEN"
+  -H "Authorization: Bearer $VOXYTOK_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"reference":"a-cryptographically-random-reference-with-at-least-32-chars"}'
 ```
 
 Response:
@@ -38,6 +40,7 @@ Response:
 ```json
 {
   "authorization_url": "https://www.tiktok.com/v2/auth/authorize/?...",
+  "reference": "a-cryptographically-random-reference-with-at-least-32-chars",
   "expires_in_seconds": 600
 }
 ```
@@ -58,7 +61,29 @@ On success, the browser receives a JSON response similar to:
 }
 ```
 
-The creator is then visible through `GET /api/v1/creators`. The callback does not accept or store Discord-specific identifiers.
+The callback does not accept or store Discord-specific identifiers. The consuming application can poll the connection status below and map the returned creator ID to its own local user using the opaque reference.
+
+### `GET /api/v1/oauth/tiktok/connections/{reference}`
+
+Returns the state of an authorization request. This endpoint is protected by the VoxyTok bearer token. The raw reference is hashed before lookup; VoxyTok never stores it in plaintext.
+
+```http
+GET /api/v1/oauth/tiktok/connections/your-random-reference
+Authorization: Bearer YOUR_API_TOKEN
+```
+
+Possible response:
+
+```json
+{
+  "status": "connected",
+  "creator_id": "CREATOR_UUID",
+  "display_name": "Creator",
+  "expires_at": "2026-11-17T12:00:00Z"
+}
+```
+
+Statuses: `pending`, `processing`, `connected`, `failed`. The reference is one-use and unique per OAuth attempt. Generate a new reference for each attempt. The status record is retained for at least 24 hours after the authorization URL expires.
 
 ## Creators
 

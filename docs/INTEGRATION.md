@@ -4,32 +4,47 @@ VoxyTok is a webhook service, not a Discord plugin. It does not need to know whi
 
 ## Recommended integration flow
 
-1. Your application backend calls `POST /api/v1/oauth/tiktok/start` with its VoxyTok API token.
-2. Your application sends the returned `authorization_url` to the person who wants to connect TikTok.
-3. TikTok redirects the browser to VoxyTok's registered callback.
-4. VoxyTok validates OAuth state, stores encrypted tokens and returns a confirmation page as JSON.
-5. The connected account appears in `GET /api/v1/creators`.
-6. VoxyTok polls the official Display API and sends new publication events to the single webhook configured for this instance.
-7. Your application verifies the signature, deduplicates the delivery and performs its own action.
+1. Your application generates a cryptographically random reference (32-128 URL-safe characters) and stores its mapping to its own local user/session.
+2. Your backend calls `POST /api/v1/oauth/tiktok/start` with that reference and its VoxyTok API token.
+3. Your application sends the returned `authorization_url` to the person who wants to connect TikTok.
+4. TikTok redirects the browser to VoxyTok's registered callback.
+5. VoxyTok validates OAuth state, stores encrypted tokens and binds the connected creator ID to the reference digest.
+6. Your backend polls `GET /api/v1/oauth/tiktok/connections/{reference}` until it receives `status: connected`.
+7. VoxyTok polls the official Display API and sends new publication events to the single webhook configured for this instance.
+8. Your application verifies the signature, deduplicates the delivery and performs its own action.
 
 The application owns all platform-specific identity and authorization. Do not add Discord user IDs, guild IDs or channel IDs to VoxyTok's core API.
 
 ## Request an authorization link
 
 ```js
+import { randomBytes } from "node:crypto";
+
+const reference = randomBytes(32).toString("base64url");
+// Persist { reference, localUserId } in your own database before returning the URL.
 const response = await fetch(
   `${process.env.VOXYTOK_URL}/api/v1/oauth/tiktok/start`,
   {
     method: "POST",
     headers: {
       Authorization: `Bearer ${process.env.VOXYTOK_API_TOKEN}`,
+      "Content-Type": "application/json",
     },
+    body: JSON.stringify({ reference }),
   },
 );
 
 if (!response.ok) throw new Error(`VoxyTok returned ${response.status}`);
 const { authorization_url } = await response.json();
 // Send authorization_url to the creator as a private link.
+
+// Later, poll from your backend (not from untrusted browser code):
+const statusResponse = await fetch(
+  `${process.env.VOXYTOK_URL}/api/v1/oauth/tiktok/connections/${reference}`,
+  { headers: { Authorization: `Bearer ${process.env.VOXYTOK_API_TOKEN}` } },
+);
+const connection = await statusResponse.json();
+// When connected, map connection.creator_id to your own local user ID.
 ```
 
 ## Verify webhook signatures

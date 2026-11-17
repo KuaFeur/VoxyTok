@@ -1,5 +1,5 @@
 import "dotenv/config";
-import crypto from "node:crypto";
+import crypto, { randomBytes } from "node:crypto";
 import express from "express";
 import pg from "pg";
 import {
@@ -32,6 +32,13 @@ await pool.query(`
   CREATE TABLE IF NOT EXISTS voxytok_webhook_receipts (
     idempotency_key TEXT PRIMARY KEY,
     processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE TABLE IF NOT EXISTS voxytok_oauth_requests (
+    reference TEXT PRIMARY KEY,
+    discord_user_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    creator_id UUID,
+    connected_at TIMESTAMPTZ
   )
 `);
 
@@ -51,11 +58,20 @@ client.on("interactionCreate", async (interaction) => {
 
   await interaction.deferReply({ ephemeral: true });
   try {
+    const reference = randomBytes(32).toString("base64url");
+    await pool.query(
+      "INSERT INTO voxytok_oauth_requests (reference, discord_user_id) VALUES ($1,$2)",
+      [reference, interaction.user.id],
+    );
     const response = await fetch(
       `${process.env.VOXYTOK_URL}/api/v1/oauth/tiktok/start`,
       {
         method: "POST",
-        headers: { Authorization: `Bearer ${process.env.VOXYTOK_API_TOKEN}` },
+        headers: {
+          Authorization: `Bearer ${process.env.VOXYTOK_API_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ reference }),
       },
     );
 
@@ -73,6 +89,37 @@ client.on("interactionCreate", async (interaction) => {
     await interaction.editReply("Unable to start TikTok authorization. Please try again later.");
   }
 });
+
+// Resolve completed OAuth attempts without giving VoxyTok any Discord identity.
+async function syncOAuthConnections() {
+  const pending = await pool.query(
+    "SELECT reference FROM voxytok_oauth_requests WHERE creator_id IS NULL AND created_at > NOW() - INTERVAL '1 day' ORDER BY created_at LIMIT 50",
+  );
+  for (const row of pending.rows) {
+    try {
+      const response = await fetch(
+        `${process.env.VOXYTOK_URL}/api/v1/oauth/tiktok/connections/${row.reference}`,
+        { headers: { Authorization: `Bearer ${process.env.VOXYTOK_API_TOKEN}` } },
+      );
+      if (response.status === 404) continue;
+      if (!response.ok) throw new Error(`VoxyTok returned HTTP ${response.status}`);
+      const status = await response.json();
+      if (status.status === "connected" && status.creator_id) {
+        await pool.query(
+          "UPDATE voxytok_oauth_requests SET creator_id=$2,connected_at=NOW() WHERE reference=$1 AND creator_id IS NULL",
+          [row.reference, status.creator_id],
+        );
+        console.info("A TikTok creator was linked to a local Discord user");
+      } else if (status.status === "failed") {
+        await pool.query("DELETE FROM voxytok_oauth_requests WHERE reference=$1", [row.reference]);
+      }
+    } catch (error) {
+      console.error("Could not sync OAuth connection:", error);
+    }
+  }
+}
+setInterval(() => syncOAuthConnections().catch(console.error), 15_000);
+await syncOAuthConnections();
 
 // Keep the raw body: HMAC must be checked before JSON parsing.
 app.post("/voxytok", express.raw({ type: "application/json", limit: "256kb" }), async (req, res) => {
