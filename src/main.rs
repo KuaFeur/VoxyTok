@@ -417,17 +417,15 @@ async fn complete_tiktok_authorization(
     if !token.scope.split(',').any(|scope| scope.trim() == "video.list") {
         return Err(StatusCode::FORBIDDEN);
     }
-    let user: TikTokUserInfoResponse = state.http.get(TIKTOK_USER_INFO_URL)
+    let user_response = state.http.get(TIKTOK_USER_INFO_URL)
         .query(&[("fields", "open_id,display_name")])
         .bearer_auth(&token.access_token).send().await
-        .map_err(|error| { tracing::error!(%error, "TikTok user info request failed"); StatusCode::BAD_GATEWAY })?
-        .error_for_status().map_err(|error| { tracing::error!(%error, "TikTok user info rejected"); StatusCode::BAD_GATEWAY })?
-        .json().await.map_err(|error| { tracing::error!(%error, "TikTok user info response invalid"); StatusCode::BAD_GATEWAY })?;
-    if let Some(api_error) = user.error {
-        tracing::error!(code=?api_error.code, message=?api_error.message, "TikTok user info failed");
-        return Err(StatusCode::BAD_GATEWAY);
-    }
-    let profile = user.data.and_then(|data| data.user).ok_or(StatusCode::BAD_GATEWAY)?;
+        .map_err(|error| { tracing::error!(%error, "TikTok user info request failed"); StatusCode::BAD_GATEWAY })?;
+    let user_status = user_response.status();
+    let user_payload: Value = user_response.json().await
+        .map_err(|error| { tracing::error!(%error, "TikTok user info response invalid"); StatusCode::BAD_GATEWAY })?;
+    let profile = parse_tiktok_user_info_response(user_status, user_payload)
+        .map_err(|error| { tracing::error!(%error, "TikTok user info failed"); StatusCode::BAD_GATEWAY })?;
     if profile.open_id != token.open_id { return Err(StatusCode::BAD_GATEWAY); }
 
     let access_enc = encrypt_token(&config.encryption_key, &token.access_token)
@@ -584,6 +582,28 @@ async fn dispatch_loop(state: AppState) {
             Err(error)=>{tracing::error!(%error,"delivery worker database error");tokio::time::sleep(Duration::from_secs(5)).await;}
         }
     }
+}
+
+fn parse_tiktok_user_info_response(
+    status: StatusCode,
+    payload: Value,
+) -> anyhow::Result<TikTokUser> {
+    if !status.is_success() {
+        let code = provider_error_code(&payload).unwrap_or("unknown");
+        anyhow::bail!("TikTok user.info failed with HTTP {status} (provider code: {code})");
+    }
+    let response: TikTokUserInfoResponse = serde_json::from_value(payload)?;
+    if let Some(error) = response.error
+        && let Some(code) = error.code.as_deref().filter(|code| *code != "ok")
+    {
+        anyhow::bail!("TikTok user.info API error ({code}): {}", error.message.as_deref().unwrap_or_default());
+    }
+    let user = response.data.and_then(|data| data.user)
+        .ok_or_else(|| anyhow::anyhow!("TikTok user.info response did not contain a user"))?;
+    if user.open_id.is_empty() {
+        anyhow::bail!("TikTok user.info returned an empty open_id");
+    }
+    Ok(user)
 }
 
 fn parse_tiktok_token_response(
@@ -1040,6 +1060,37 @@ mod tests {
         ).bind(hash_state(&app_reference)).fetch_one(&db).await.unwrap();
         assert_eq!(deleted_connection_status,"reauthorization_required");
         db.close().await;
+    }
+
+    #[test]
+    fn user_info_parser_accepts_success_status_object() {
+        let user = parse_tiktok_user_info_response(
+            StatusCode::OK,
+            json!({
+                "data": {"user": {"open_id": "creator-123", "display_name": "Creator"}},
+                "error": {"code": "ok", "message": ""}
+            }),
+        ).unwrap();
+        assert_eq!(user.open_id, "creator-123");
+        assert_eq!(user.display_name.as_deref(), Some("Creator"));
+    }
+
+    #[test]
+    fn user_info_parser_rejects_provider_errors_and_missing_profiles() {
+        let api_error = parse_tiktok_user_info_response(
+            StatusCode::OK,
+            json!({
+                "data": null,
+                "error": {"code": "scope_not_authorized", "message": "missing scope"}
+            }),
+        ).err().unwrap();
+        assert!(api_error.to_string().contains("scope_not_authorized"));
+
+        let missing_user = parse_tiktok_user_info_response(
+            StatusCode::OK,
+            json!({"data": {}, "error": {"code": "ok", "message": ""}}),
+        );
+        assert!(missing_user.is_err());
     }
 
     #[test]
