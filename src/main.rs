@@ -1095,11 +1095,26 @@ mod tests {
         ).bind(Uuid::new_v4()).bind(creator_id).bind(&payload).fetch_optional(&db).await.unwrap();
         assert!(duplicate.is_none());
 
+        let delivery_id = Uuid::new_v4();
         sqlx::query("INSERT INTO deliveries (id,video_id) VALUES ($1,$2)")
-            .bind(Uuid::new_v4()).bind(video_id).execute(&db).await.unwrap();
+            .bind(delivery_id).bind(video_id).execute(&db).await.unwrap();
         let delivery_count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM deliveries WHERE video_id=$1")
             .bind(video_id).fetch_one(&db).await.unwrap();
         assert_eq!(delivery_count,1);
+
+        // A process crash after claiming a webhook must not strand it forever.
+        sqlx::query(
+            "UPDATE deliveries SET status='processing',
+             processing_started_at=NOW()-INTERVAL '6 minutes' WHERE id=$1",
+        ).bind(delivery_id).execute(&db).await.unwrap();
+        let recovered = claim_delivery(&db).await.unwrap().unwrap();
+        assert_eq!(recovered.id, delivery_id);
+        assert_eq!(recovered.attempts, 1);
+        let (delivery_status, delivery_attempts):(String,i32) = sqlx::query_as(
+            "SELECT status,attempts FROM deliveries WHERE id=$1",
+        ).bind(delivery_id).fetch_one(&db).await.unwrap();
+        assert_eq!(delivery_status, "processing");
+        assert_eq!(delivery_attempts, 1);
         sqlx::query("DELETE FROM creators WHERE id=$1").bind(creator_id).execute(&db).await.unwrap();
         let deleted_connection_status: String = sqlx::query_scalar(
             "SELECT CASE
