@@ -464,8 +464,8 @@ async fn get_tiktok_connection(
     }
     let connection = sqlx::query_as::<_, OAuthConnectionStatus>(
         "SELECT CASE
-             WHEN s.status='pending' AND s.expires_at<=NOW() THEN 'expired'
-             WHEN s.status='connected' AND c.enabled=FALSE THEN 'reauthorization_required'
+             WHEN s.status IN ('pending','processing') AND s.expires_at<=NOW() THEN 'expired'
+             WHEN s.status='connected' AND (c.id IS NULL OR c.enabled=FALSE) THEN 'reauthorization_required'
              ELSE s.status
          END AS status,
          s.creator_id,c.display_name,s.expires_at
@@ -942,6 +942,16 @@ mod tests {
             .bind(video_id).fetch_one(&db).await.unwrap();
         assert_eq!(delivery_count,1);
         sqlx::query("DELETE FROM creators WHERE id=$1").bind(creator_id).execute(&db).await.unwrap();
+        let deleted_connection_status: String = sqlx::query_scalar(
+            "SELECT CASE
+                WHEN s.status IN ('pending','processing') AND s.expires_at<=NOW() THEN 'expired'
+                WHEN s.status='connected' AND (c.id IS NULL OR c.enabled=FALSE) THEN 'reauthorization_required'
+                ELSE s.status
+             END
+             FROM oauth_states s LEFT JOIN creators c ON c.id=s.creator_id
+             WHERE s.client_reference_hash=$1",
+        ).bind(hash_state(&app_reference)).fetch_one(&db).await.unwrap();
+        assert_eq!(deleted_connection_status,"reauthorization_required");
         db.close().await;
     }
 
