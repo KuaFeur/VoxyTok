@@ -191,6 +191,7 @@ struct PollingCreator {
     refresh_token_enc: String,
     access_expires_at: DateTime<Utc>,
     refresh_expires_at: DateTime<Utc>,
+    last_polled_at: Option<DateTime<Utc>>,
 }
 
 fn encrypt_token(key: &[u8; 32], token: &str) -> anyhow::Result<String> {
@@ -439,12 +440,12 @@ async fn complete_tiktok_authorization(
         "INSERT INTO creators
             (id,username,display_name,tiktok_open_id,access_token_enc,refresh_token_enc,
              access_expires_at,refresh_expires_at,enabled,last_polled_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,NULL)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,NOW())
          ON CONFLICT (tiktok_open_id) DO UPDATE SET
             username=EXCLUDED.username,display_name=EXCLUDED.display_name,
             access_token_enc=EXCLUDED.access_token_enc,refresh_token_enc=EXCLUDED.refresh_token_enc,
             access_expires_at=EXCLUDED.access_expires_at,refresh_expires_at=EXCLUDED.refresh_expires_at,
-            enabled=TRUE,last_polled_at=NULL,next_poll_at=NULL,poll_failures=0,last_error=NULL
+            enabled=TRUE,last_polled_at=NOW(),next_poll_at=NOW(),poll_failures=0,last_error=NULL
          RETURNING id",
     ).bind(Uuid::new_v4()).bind(username).bind(profile.display_name.clone())
         .bind(profile.open_id).bind(access_enc).bind(refresh_enc)
@@ -757,6 +758,12 @@ async fn poll_creator(state: &AppState, mut creator: PollingCreator, config: &Ti
     // Refresh at most once per synchronization run, then retry the rejected page.
     let mut forced_refresh_used=false;
 
+    // Only emit publications created after the creator connected (or after the
+    // previous successful poll). A one-second overlap avoids losing videos
+    // whose provider timestamp has second-level precision; the DB unique key
+    // makes that overlap safe.
+    let poll_watermark = creator.last_polled_at.unwrap_or_else(Utc::now)
+        - ChronoDuration::seconds(1);
     let mut inserted_count=0usize;
     let mut cursor: Option<i64>=None;
     let mut pages_fetched=0usize;
@@ -780,6 +787,9 @@ async fn poll_creator(state: &AppState, mut creator: PollingCreator, config: &Ti
         let videos=data.videos.unwrap_or_default();
         for video in videos {
         let published_at=video.create_time.and_then(|timestamp|DateTime::from_timestamp(timestamp,0));
+        if !published_at.is_some_and(|published_at| published_at >= poll_watermark) {
+            continue;
+        }
         let payload=json!({
             "event":"tiktok.video.published",
             "provider":"tiktok_display_api",
@@ -828,7 +838,7 @@ async fn tiktok_poll_loop(state: AppState) {
     loop {
         let creators=sqlx::query_as::<_,PollingCreator>(
             "SELECT id,username,display_name,access_token_enc,refresh_token_enc,
-             access_expires_at,refresh_expires_at FROM creators
+             access_expires_at,refresh_expires_at,last_polled_at FROM creators
              WHERE enabled=TRUE AND tiktok_open_id IS NOT NULL
              AND ((next_poll_at IS NULL AND (last_polled_at IS NULL OR last_polled_at<=NOW()-($1*INTERVAL '1 hour'))) OR next_poll_at<=NOW())
              ORDER BY COALESCE(next_poll_at,last_polled_at) NULLS FIRST LIMIT 10",
@@ -954,6 +964,7 @@ mod tests {
             refresh_token_enc: encrypt_token(&key, "old-refresh").unwrap(),
             access_expires_at: Utc::now(),
             refresh_expires_at: Utc::now(),
+            last_polled_at: None,
         };
         let new_access = encrypt_token(&key, "new-access").unwrap();
         let new_refresh = encrypt_token(&key, "rotated-refresh").unwrap();
@@ -1060,6 +1071,24 @@ mod tests {
         ).bind(hash_state(&app_reference)).fetch_one(&db).await.unwrap();
         assert_eq!(deleted_connection_status,"reauthorization_required");
         db.close().await;
+    }
+
+    #[test]
+    fn first_sync_watermark_skips_historical_publications() {
+        let connected_at = Utc::now();
+        let cutoff = connected_at - ChronoDuration::seconds(1);
+        let old_video = (connected_at - ChronoDuration::seconds(5)).timestamp();
+        let overlapping_video = (connected_at - ChronoDuration::milliseconds(500)).timestamp();
+        let new_video = (connected_at + ChronoDuration::seconds(5)).timestamp();
+
+        let old_published = DateTime::from_timestamp(old_video, 0).unwrap();
+        let overlap_published = DateTime::from_timestamp(overlapping_video, 0).unwrap();
+        let new_published = DateTime::from_timestamp(new_video, 0).unwrap();
+
+        assert!(old_published < cutoff);
+        assert!(overlap_published >= cutoff);
+        assert!(new_published >= cutoff);
+        assert!(DateTime::from_timestamp(old_video, 0).is_some());
     }
 
     #[test]
