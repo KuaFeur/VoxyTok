@@ -400,7 +400,7 @@ async fn complete_tiktok_authorization(
         return Err(StatusCode::BAD_REQUEST);
     }
     let code = callback.code.as_deref().ok_or(StatusCode::BAD_REQUEST)?;
-    let token: TikTokTokenResponse = state.http.post(TIKTOK_TOKEN_URL)
+    let token_response = state.http.post(TIKTOK_TOKEN_URL)
         .form(&[
             ("client_key", config.client_key.as_str()),
             ("client_secret", config.client_secret.as_str()),
@@ -409,11 +409,13 @@ async fn complete_tiktok_authorization(
             ("redirect_uri", config.redirect_uri.as_str()),
         ]).send().await.map_err(|error| {
             tracing::error!(%error, "TikTok token exchange request failed"); StatusCode::BAD_GATEWAY
-        })?.error_for_status().map_err(|error| {
-            tracing::error!(%error, "TikTok token exchange was rejected"); StatusCode::BAD_GATEWAY
-        })?.json().await.map_err(|error| {
-            tracing::error!(%error, "TikTok token response was invalid"); StatusCode::BAD_GATEWAY
         })?;
+    let token_status = token_response.status();
+    let token_payload: Value = token_response.json().await.map_err(|error| {
+        tracing::error!(%error, "TikTok token response was invalid"); StatusCode::BAD_GATEWAY
+    })?;
+    let token = parse_tiktok_token_response(token_status, token_payload)
+        .map_err(|error| { tracing::error!(%error, "TikTok token exchange was rejected"); StatusCode::BAD_GATEWAY })?;
 
     if !token.scope.split(',').any(|scope| scope.trim() == "video.list") {
         return Err(StatusCode::FORBIDDEN);
@@ -644,15 +646,15 @@ fn parse_tiktok_token_response(
     let code = provider_error_code(&payload).unwrap_or("unknown");
     if !status.is_success() {
         if is_permanent_tiktok_auth_error(code) {
-            anyhow::bail!("reauthorization_required: TikTok rejected the refresh token ({code})");
+            anyhow::bail!("reauthorization_required: TikTok rejected the token grant ({code})");
         }
-        anyhow::bail!("TikTok token refresh failed with HTTP {status} (provider code: {code})");
+        anyhow::bail!("TikTok token endpoint failed with HTTP {status} (provider code: {code})");
     }
     if !code.is_empty() && code != "unknown" && code != "ok" {
         if is_permanent_tiktok_auth_error(code) {
             anyhow::bail!("reauthorization_required: TikTok rejected the refresh token ({code})");
         }
-        anyhow::bail!("TikTok token refresh failed (provider code: {code})");
+        anyhow::bail!("TikTok token endpoint failed (provider code: {code})");
     }
     let token: TikTokTokenResponse = serde_json::from_value(payload)?;
     if token.access_token.is_empty()
@@ -661,7 +663,7 @@ fn parse_tiktok_token_response(
         || token.expires_in <= 0
         || token.refresh_expires_in <= 0
     {
-        anyhow::bail!("TikTok token refresh returned incomplete or invalid credentials");
+        anyhow::bail!("TikTok token endpoint returned incomplete or invalid credentials");
     }
     Ok(token)
 }
