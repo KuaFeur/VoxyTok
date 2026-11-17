@@ -611,6 +611,12 @@ fn next_video_cursor(
     Ok(Some(next))
 }
 
+fn page_reached_watermark(oldest_create_time: Option<i64>, watermark: DateTime<Utc>) -> bool {
+    oldest_create_time
+        .and_then(|timestamp| DateTime::from_timestamp(timestamp, 0))
+        .is_some_and(|published_at| published_at < watermark)
+}
+
 fn is_new_publication(create_time: Option<i64>, watermark: DateTime<Utc>) -> bool {
     create_time
         .and_then(|timestamp| DateTime::from_timestamp(timestamp, 0))
@@ -829,6 +835,9 @@ async fn poll_creator(state: &AppState, mut creator: PollingCreator, config: &Ti
         };
         let Some(data)=response.data else { break; };
         let videos=data.videos.unwrap_or_default();
+        // TikTok returns video.list pages sorted newest-first. Once the last
+        // item is older than our watermark, later pages cannot contain new posts.
+        let oldest_video_time=videos.last().and_then(|video|video.create_time);
         for video in videos {
         let published_at=video.create_time.and_then(|timestamp|DateTime::from_timestamp(timestamp,0));
         if !is_new_publication(video.create_time, poll_watermark) {
@@ -862,6 +871,9 @@ async fn poll_creator(state: &AppState, mut creator: PollingCreator, config: &Ti
         }
         tx.commit().await?;
 
+        }
+        if page_reached_watermark(oldest_video_time, poll_watermark) {
+            break;
         }
         match next_video_cursor(data.has_more, pages_fetched, cursor, data.cursor)? {
             Some(next_cursor) => cursor = Some(next_cursor),
@@ -1162,6 +1174,15 @@ mod tests {
         assert!(next_video_cursor(Some(true), 1, None, None).is_err());
         assert!(next_video_cursor(Some(true), 2, Some(123), Some(123)).is_err());
         assert!(next_video_cursor(Some(true), 20, Some(123), Some(456)).is_err());
+    }
+
+    #[test]
+    fn pagination_stops_after_reaching_the_oldest_known_publication() {
+        let watermark = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        assert!(page_reached_watermark(Some(1_699_999_999), watermark));
+        assert!(!page_reached_watermark(Some(1_700_000_000), watermark));
+        assert!(!page_reached_watermark(Some(1_700_000_001), watermark));
+        assert!(!page_reached_watermark(None, watermark));
     }
 
     #[test]

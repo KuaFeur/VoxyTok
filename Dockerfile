@@ -22,5 +22,7 @@ COPY docker/entrypoint.sh /usr/local/bin/voxytok-entrypoint
 RUN chmod 0755 /usr/local/bin/voxytok /usr/local/bin/voxytok-entrypoint
 WORKDIR /home/container
 EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD curl --fail --silent "http://127.0.0.1:${PORT:-8080}/readyz" || exit 1
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/voxytok-entrypoint"]
