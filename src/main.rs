@@ -591,8 +591,10 @@ fn next_video_cursor(
     current_cursor: Option<i64>,
     next_cursor: Option<i64>,
 ) -> anyhow::Result<Option<i64>> {
-    if has_more != Some(true) {
-        return Ok(None);
+    match has_more {
+        Some(false) => return Ok(None),
+        Some(true) => {}
+        None => anyhow::bail!("TikTok video.list omitted the has_more pagination flag"),
     }
     if pages_fetched >= 20 {
         anyhow::bail!("TikTok video.list pagination exceeded the 20-page safety limit");
@@ -699,8 +701,10 @@ fn parse_video_page_response(
         }
         anyhow::bail!("TikTok video.list API error ({code}): {}", api_error.message.as_deref().unwrap_or_default());
     }
-    if parsed.data.is_none() {
-        anyhow::bail!("TikTok video.list returned a successful response without data");
+    let data = parsed.data.as_ref()
+        .ok_or_else(|| anyhow::anyhow!("TikTok video.list returned a successful response without data"))?;
+    if data.videos.is_none() || data.has_more.is_none() {
+        anyhow::bail!("TikTok video.list returned an incomplete pagination payload");
     }
     Ok(parsed)
 }
@@ -1114,6 +1118,7 @@ mod tests {
     fn pagination_stops_only_when_provider_says_no_more() {
         assert_eq!(next_video_cursor(Some(false), 1, None, None).unwrap(), None);
         assert_eq!(next_video_cursor(Some(true), 1, None, Some(123)).unwrap(), Some(123));
+        assert!(next_video_cursor(None, 1, None, None).is_err());
     }
 
     #[test]
@@ -1257,6 +1262,12 @@ mod tests {
             json!({"error": {"code": "ok"}}),
         );
         assert!(malformed_success.is_err());
+
+        let incomplete_pagination = parse_video_page_response(
+            StatusCode::OK,
+            json!({"data": {"videos": []}, "error": {"code": "ok"}}),
+        );
+        assert!(incomplete_pagination.is_err());
     }
 
     #[test]
