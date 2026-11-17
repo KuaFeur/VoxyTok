@@ -842,6 +842,22 @@ async fn refresh_creator_token(state: &AppState, creator: &mut PollingCreator, c
     // refreshes in this single-instance process to prevent concurrent callers
     // from invalidating one another's freshly rotated credentials.
     let _refresh_guard = state.token_refresh_lock.lock().await;
+    let current = sqlx::query_as::<_, (String, String, DateTime<Utc>, DateTime<Utc>)>(
+        "SELECT access_token_enc,refresh_token_enc,access_expires_at,refresh_expires_at
+         FROM creators WHERE id=$1",
+    ).bind(creator.id).fetch_optional(&state.db).await?
+        .ok_or_else(|| anyhow::anyhow!("reauthorization_required: creator no longer exists"))?;
+    let credentials_changed = current.0 != creator.access_token_enc
+        || current.1 != creator.refresh_token_enc;
+    creator.access_token_enc = current.0;
+    creator.refresh_token_enc = current.1;
+    creator.access_expires_at = current.2;
+    creator.refresh_expires_at = current.3;
+    // Another caller may have completed a refresh while this caller waited
+    // for the lock. Reuse that fresh access token instead of rotating again.
+    if credentials_changed {
+        return decrypt_token(&config.encryption_key, &creator.access_token_enc);
+    }
     let refresh_token=decrypt_token(&config.encryption_key,&creator.refresh_token_enc)?;
     let response=state.http.post(TIKTOK_TOKEN_URL)
         .form(&[
