@@ -146,6 +146,7 @@ async fn poll_one(db: &PgPool, creator: DueCreator, sources: &[SourceAdapter], p
         "UPDATE creators SET poll_lease_until=NOW()+INTERVAL '2 minutes' WHERE id=$1 AND enabled=TRUE AND tiktok_open_id IS NULL AND next_poll_at<=NOW() AND (poll_lease_until IS NULL OR poll_lease_until<NOW()) RETURNING id,username,display_name,last_polled_at,monitoring_started_at,poll_failures"
     ).bind(creator.id).fetch_optional(db).await? else { return Ok(()); };
     let mut last_error = None;
+    let mut empty_feed_candidate: Option<(PublicProfile, String)> = None;
     for source in sources {
         let source_key = source.key();
         let host_key = source.host_key();
@@ -154,6 +155,14 @@ async fn poll_one(db: &PgPool, creator: DueCreator, sources: &[SourceAdapter], p
         match source.fetch_profile(&creator.username).await {
             Ok(profile) => {
                 record_source_success(db, creator.id, &source_key, &host_key, started.elapsed().as_millis() as i64).await?;
+                if profile.videos.is_empty() {
+                    // An empty feed is valid, but another RSSHub instance may
+                    // have fresher cache contents. Keep it as a last-resort baseline.
+                    if empty_feed_candidate.is_none() {
+                        empty_feed_candidate = Some((profile, source_key));
+                    }
+                    continue;
+                }
                 let count = ingest_profile(db, &creator, profile, &source_key, poll_interval).await?;
                 tracing::info!(creator=%creator.username, source=%source_key, new_videos=count, first_sync=creator.last_polled_at.is_none(), "public TikTok profile synchronized");
                 return Ok(());
@@ -166,6 +175,11 @@ async fn poll_one(db: &PgPool, creator: DueCreator, sources: &[SourceAdapter], p
                 last_error = Some(format!("{}: {:?}", source_key, error));
             }
         }
+    }
+    if let Some((profile, source_key)) = empty_feed_candidate {
+        let count = ingest_profile(db, &creator, profile, &source_key, poll_interval).await?;
+        tracing::info!(creator=%creator.username, source=%source_key, new_videos=count, "public profile synchronized from an empty fallback feed");
+        return Ok(());
     }
     let message = last_error.unwrap_or_else(|| "all configured sources are in cooldown".to_owned());
     sqlx::query("UPDATE creators SET poll_lease_until=NULL,poll_failures=poll_failures+1,next_poll_at=NOW()+($2*INTERVAL '1 second'),last_error=$3 WHERE id=$1")
