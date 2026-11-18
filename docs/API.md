@@ -15,6 +15,8 @@ Keep this token on your application server. One VoxyTok instance belongs to one 
 - `GET /healthz`: process liveness.
 - `GET /readyz`: PostgreSQL readiness.
 
+Both return `public_monitor_configured` and `public_source_count`, showing whether public acquisition is enabled and how many retrieval paths are configured. The legacy `tiktok_provider_configured` field reports only the old OAuth provider and is not required for username-only monitoring.
+
 ## Creators
 
 ### `POST /api/v1/creators`
