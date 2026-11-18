@@ -166,6 +166,13 @@ pub enum SourceAdapter {
 impl SourceAdapter {
     pub fn key(&self) -> String {
         match self {
+            Self::TikTokPublicProfile(_) => "tiktok_public_profile".to_owned(),
+            Self::RssHub(source) => format!("rsshub:{}", source.base_url.host_str().unwrap_or("unknown")),
+        }
+    }
+
+    pub fn host_key(&self) -> String {
+        match self {
             Self::TikTokPublicProfile(_) => "tiktok.com".to_owned(),
             Self::RssHub(source) => format!("rsshub:{}", source.base_url.host_str().unwrap_or("unknown")),
         }
