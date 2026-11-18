@@ -115,7 +115,7 @@ paths:
                   connected: { type: boolean, const: true }
                   display_name: { type: [string, "null"] }
                   message: { type: string }
-        "400": { description: Invalid or expired state, or authorization declined }
+        "400": { description: "Invalid or expired state, or authorization declined" }
         "403": { description: Required video.list scope was not granted }
   /api/v1/creators:
     get:
