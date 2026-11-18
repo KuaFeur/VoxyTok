@@ -9,8 +9,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# CI executes repository code, including build scripts and tests. It needs no write access.
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -40,64 +41,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node --check examples/discord.js/index.js
+      - name: Validate Discord.js example syntax
+        run: node --check examples/discord.js/index.js
       - name: Validate Pelican egg JSON
         run: python -m json.tool deploy/pelican/egg-voxytok.json >/dev/null
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo generate-lockfile
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all
-      - run: cargo check --locked --all-targets
-      - run: cargo test --locked --all-targets
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - name: Commit Cargo.lock on main
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const { owner, repo } = context.repo;
-            const path = 'Cargo.lock';
-            const content = fs.readFileSync(path, 'utf8');
-            let existing = null;
-            try {
-              existing = await github.rest.repos.getContent({ owner, repo, path, ref: 'main' });
-            } catch (error) {
-              if (error.status !== 404) throw error;
-            }
-            if (existing && !Array.isArray(existing.data) &&
-                Buffer.from(existing.data.content, 'base64').toString('utf8') === content) {
-              core.info('Cargo.lock is already up to date.');
-              return;
-            }
-            const payload = {
-              owner, repo, path,
-              message: 'build: add or update Cargo.lock',
-              content: Buffer.from(content, 'utf8').toString('base64'),
-              branch: 'main',
-            };
-            if (existing && !Array.isArray(existing.data)) payload.sha = existing.data.sha;
-            await github.rest.repos.createOrUpdateFileContents(payload);
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cargo-lockfile
-          path: Cargo.lock
-          if-no-files-found: error
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Compile all targets
+        run: cargo check --locked --all-targets
+      - name: Run unit and PostgreSQL integration tests
+        run: cargo test --locked --all-targets
+      - name: Run strict Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
 
   container:
-    name: Container build
+    name: Container build and smoke test
     needs: rust
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - uses: actions/download-artifact@v4
-        with:
-          name: cargo-lockfile
-          path: .
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -113,20 +80,25 @@ jobs:
             -e API_TOKEN=ci_api_token_0123456789_abcdefghijklmnop \
             -e POSTGRES_PASSWORD=ci_postgres_password_0123456789 \
             voxytok:ci
+          cleanup() {
+            docker logs voxytok-ci || true
+            docker rm -f voxytok-ci >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
           for attempt in $(seq 1 60); do
             if curl --silent --fail http://127.0.0.1:8080/readyz >/dev/null; then
               break
             fi
             if [ "$attempt" -eq 60 ]; then
-              docker logs voxytok-ci
+              echo "VoxyTok did not become ready in time" >&2
               exit 1
             fi
             sleep 2
           done
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/api/v1/creators)" = "401"
-          curl --silent --fail -H "Authorization: Bearer ci_api_token_0123456789_abcdefghijklmnop" \
+          curl --silent --fail \
+            -H "Authorization: Bearer ci_api_token_0123456789_abcdefghijklmnop" \
             http://127.0.0.1:8080/api/v1/creators | grep -q '^\[\]$'
-          docker rm -f voxytok-ci
 
   publish-latest:
     name: Publish latest container
