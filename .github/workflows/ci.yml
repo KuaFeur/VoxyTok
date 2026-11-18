@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "ci/**"]
+    branches: [main, "ci/digest-summary-validation"]
   pull_request:
 
 concurrency:
