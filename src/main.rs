@@ -1068,6 +1068,7 @@ async fn main() -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!("../migrations/0003_tiktok_oauth.sql")).execute(&db).await?;
     sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await?;
     sqlx::raw_sql(include_str!("../migrations/0005_oauth_connection_tracking.sql")).execute(&db).await?;
+    sqlx::raw_sql(include_str!("../migrations/0006_public_profile_sources.sql")).execute(&db).await?
 
     let webhook_url=env::var("WEBHOOK_URL").ok().filter(|value|!value.trim().is_empty());
     if let Some(url)=&webhook_url { validate_webhook_url(url)?; }
@@ -1192,6 +1193,7 @@ mod tests {
         sqlx::raw_sql(include_str!("../migrations/0003_tiktok_oauth.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0005_oauth_connection_tracking.sql")).execute(&db).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0006_public_profile_sources.sql")).execute(&db).await.unwrap();
 
         let creator_id = Uuid::new_v4();
         let username = format!("ci_{}", Uuid::new_v4().simple());
