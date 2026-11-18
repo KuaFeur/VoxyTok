@@ -54,27 +54,33 @@ impl TikTokEmbedSource {
             .ok_or_else(|| anyhow!("TikTok embed state script is not closed"))?;
         let state: Value = serde_json::from_str(html[script_start..script_end].trim())
             .context("TikTok embed state is not valid JSON")?;
-        let (user, videos) = find_profile_payload(&state)
-            .ok_or_else(|| anyhow!("TikTok embed state does not contain a profile video list"))?;
-
+        let user_info = find_value(&state, "userInfo")
+            .ok_or_else(|| anyhow!("TikTok public profile response has no userInfo"))?;
+        let user = user_info.get("user").filter(|value| value.is_object()).unwrap_or(user_info);
         let canonical_username = user.get("uniqueId").and_then(Value::as_str)
             .unwrap_or(username).trim_start_matches('@').to_owned();
         let display_name = user.get("nickname").and_then(Value::as_str).map(str::to_owned);
-        let avatar_url = user.get("avatarThumbUrl").and_then(Value::as_str).map(str::to_owned);
+        let avatar_url = user.get("avatarLarger").or_else(|| user.get("avatarMedium"))
+            .or_else(|| user.get("avatarThumb")).and_then(Value::as_str).map(str::to_owned);
+        let videos = find_value(&state, "itemList")
+            .or_else(|| find_value(&state, "videoList"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("TikTok public profile response has no video list"))?;
         let mut normalized = Vec::new();
-        for video in videos.as_array().context("TikTok videoList is not an array")? {
+        for video in videos {
             let Some(id) = video.get("id").and_then(Value::as_str) else { continue; };
             if id.is_empty() { continue; }
             let title = video.get("desc").and_then(Value::as_str).map(str::to_owned);
-            let timestamp = video.get("createTime").and_then(Value::as_i64)
-                .or_else(|| id.parse::<u64>().ok().map(|value| (value >> 32) as i64));
+            let video_meta = video.get("video").unwrap_or(video);
+            let timestamp = video.get("createTime").and_then(Value::as_i64);
             let published_at = timestamp.and_then(|value| DateTime::from_timestamp(value, 0));
             normalized.push(PublicVideo {
                 id: id.to_owned(),
                 title: title.clone(),
                 description: title,
                 url: format!("https://www.tiktok.com/@{canonical_username}/video/{id}"),
-                cover_image_url: video.get("coverUrl").and_then(Value::as_str).map(str::to_owned),
+                cover_image_url: video_meta.get("cover").or_else(|| video_meta.get("originCover"))
+                    .and_then(Value::as_str).map(str::to_owned),
                 published_at,
             });
         }
@@ -87,7 +93,7 @@ impl ProfileSource for TikTokEmbedSource {
 
     async fn fetch_profile(&self, username: &str) -> std::result::Result<PublicProfile, SourceFailure> {
         let handle = username.trim_start_matches('@');
-        let url = format!("https://www.tiktok.com/embed/@{handle}");
+        let url = format!("https://www.tiktok.com/@{handle}");
         let response = self.client.get(url).send().await
             .map_err(|error| SourceFailure::TemporarilyUnavailable(error.to_string()))?;
         let status = response.status();
@@ -106,7 +112,7 @@ impl ProfileSource for TikTokEmbedSource {
         }
         let html = response.text().await
             .map_err(|error| SourceFailure::TemporarilyUnavailable(error.to_string()))?;
-        if html.contains("_wafchallengeid") || html.contains("captcha") && !html.contains("__FRONTITY_CONNECT_STATE__") {
+        if html.contains("_wafchallengeid") || html.to_ascii_lowercase().contains("captcha") && !html.contains("__UNIVERSAL_DATA_FOR_REHYDRATION__") {
             return Err(SourceFailure::Challenge);
         }
         self.parse(handle, &html).map_err(|error| SourceFailure::Malformed(error.to_string()))
@@ -153,17 +159,15 @@ impl ProfileSource for RssProfileSource {
     }
 }
 
-fn find_profile_payload(value: &Value) -> Option<(&Value, &Value)> {
+fn find_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     if let Some(object) = value.as_object() {
-        if let (Some(user), Some(videos)) = (object.get("userInfo"), object.get("videoList")) {
-            if user.is_object() && videos.is_array() { return Some((user, videos)); }
-        }
+        if let Some(found) = object.get(key) { return Some(found); }
         for child in object.values() {
-            if let Some(found) = find_profile_payload(child) { return Some(found); }
+            if let Some(found) = find_value(child, key) { return Some(found); }
         }
     } else if let Some(array) = value.as_array() {
         for child in array {
-            if let Some(found) = find_profile_payload(child) { return Some(found); }
+            if let Some(found) = find_value(child, key) { return Some(found); }
         }
     }
     None
