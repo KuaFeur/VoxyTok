@@ -33,7 +33,6 @@ pub enum SourceFailure {
     Malformed(String),
 }
 
-#[async_trait::async_trait]
 pub trait ProfileSource: Send + Sync {
     fn key(&self) -> &'static str;
     async fn fetch_profile(&self, username: &str) -> std::result::Result<PublicProfile, SourceFailure>;
@@ -83,7 +82,6 @@ impl TikTokEmbedSource {
     }
 }
 
-#[async_trait::async_trait]
 impl ProfileSource for TikTokEmbedSource {
     fn key(&self) -> &'static str { "tiktok_embed" }
 
@@ -131,7 +129,6 @@ impl RssProfileSource {
     }
 }
 
-#[async_trait::async_trait]
 impl ProfileSource for RssProfileSource {
     fn key(&self) -> &'static str { "rsshub" }
 
