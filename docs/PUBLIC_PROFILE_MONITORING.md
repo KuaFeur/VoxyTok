@@ -2,73 +2,73 @@
 
 ## Product contract
 
-Normal creator onboarding must require only a public TikTok username. No creator OAuth, account linking, video submission, browser cookies, or manual source configuration is part of the consumer workflow.
+Normal creator onboarding requires only a public TikTok username. No creator OAuth, account linking, browser cookies, manual video submission or per-creator source configuration is part of the consumer workflow.
 
 The consuming application still authenticates to its own VoxyTok instance with its server-side API token. One VoxyTok instance continues to belong to one bot/application.
 
-## Acquisition architecture
+## Acquisition paths
 
-Acquisition is provider-agnostic. A creator is a public profile identified by a normalized username, not an OAuth identity. The scheduler creates one monitoring job per creator, regardless of how many consumers or webhook destinations exist (one destination per instance).
+Each source returns a normalized profile and newest-first video records. The initial retrieval paths are:
 
-Each acquisition adapter implements the same contract:
-- resolve a username to a canonical public profile;
-- fetch a bounded newest-first page of public videos;
-- return normalized video metadata and a provider cursor when available;
-- classify errors as transient, rate-limited, unavailable, private/not-found, or malformed;
-- expose a source identifier and health statistics.
+1. **Direct TikTok embed adapter** — requests the public `/embed/@username` page and parses its embedded profile/video state. It does not solve WAF challenges, use cookies, or bypass access controls.
+2. **RSSHub-compatible adapters** — query several configured public RSSHub instances using the TikTok user route and parse RSS 2.0 or Atom. Each host has independent health and cooldown state.
 
-The initial adapters should be independent implementations, not aliases to the same third-party endpoint:
-1. **TikTok public embed page adapter** — fetches the public embed representation and parses its embedded profile/video state. This is the primary direct source. It must not attempt to defeat challenges or access controls.
-2. **RSS adapter** — consumes RSS 2.0/Atom feeds from a configurable, self-hosted RSSHub-compatible endpoint. This is a fallback/bridge adapter, not the canonical database or a user-facing RSS feature.
-3. **Additional adapters** — can be added behind the same trait without changing the public API.
+Important limitation: RSSHub's TikTok route also obtains its feed from TikTok's public embed page. These are separate retrieval intermediaries and caches, not independent underlying TikTok data providers. They can provide useful fallback when one route or network path is unavailable, but they cannot guarantee bypass of a TikTok-wide block or outage.
 
-A source registry selects an eligible adapter using health, recent success rate, latency, and cooldown state. A successful result is normalized before ingestion. PostgreSQL deduplicates by (creator_id, platform_video_id), so the same post found by multiple sources generates one event.
+The source registry orders adapters and selects the first healthy one. A successful result is normalized before ingestion. PostgreSQL deduplicates by `(creator_id, platform_video_id)`, so the same post found through multiple paths generates one event.
 
 ## Rate-limit and resilience policy
 
-There is no honest way to promise that public TikTok endpoints will never rate-limit or block automated access. VoxyTok must not rotate identities, evade CAPTCHAs, spoof user sessions, or bypass access controls to claim otherwise.
+There is no honest way to promise that public TikTok endpoints or public RSSHub instances will never rate-limit or block automated access. VoxyTok must not rotate identities, evade CAPTCHAs, spoof user sessions, or bypass access controls.
 
 Instead:
-- global and per-host concurrency limits;
-- per-profile minimum poll intervals and jitter;
-- conditional requests when the source provides validators;
-- shared profile cache so the same profile is not fetched twice in one poll window;
-- exponential backoff with Retry-After support;
-- circuit breakers and temporary source quarantine;
-- fallback only to a genuinely independent adapter;
-- no aggressive retry loops after 403, 429, challenge pages, or repeated malformed responses;
-- metrics for source health, request count, latency, new videos, and failure class.
 
-If every available public source is unavailable, the creator remains monitored and retries after its cooldown. VoxyTok must report degraded monitoring rather than silently claiming real-time coverage.
+- bounded global concurrency (four creator lookups at a time);
+- configurable per-profile polling interval (five minutes by default; operator range 60-3600 seconds);
+- per-host source state and cooldowns;
+- respect `Retry-After` on HTTP 429;
+- exponential cooldown after repeated failures;
+- shared database deduplication across all sources;
+- skip sources in cooldown and fail over to the next configured retrieval path;
+- no aggressive retries after 403, 429, challenge pages or malformed responses;
+- preserve error class, latency, success/failure counters and last successful poll.
+
+If every available path is unavailable, the creator remains monitored and retries after backoff. VoxyTok reports degraded monitoring rather than silently claiming real-time coverage.
 
 ## Detection and delivery
 
-- First successful lookup establishes a watermark and does not replay the creator's historical catalogue.
-- Later lookups inspect newest-first results and stop once they reach the last successful watermark.
-- Overlap between polls is intentional; the unique database constraint prevents duplicate events.
+- First successful lookup establishes a baseline and does not replay the existing catalogue.
+- Later lookups inspect returned videos and emit only new IDs with a publication timestamp within a two-minute overlap of the previous successful poll.
+- Videos discovered through a different feed but older than the watermark are stored without creating a notification.
+- The unique database constraint prevents duplicates.
 - New publications enter the existing durable outbox.
-- Existing signed webhook delivery, idempotency keys, retries, and one-webhook-per-instance behavior remain unchanged.
+- Existing signed webhook delivery, idempotency keys, retries and one-webhook-per-instance behavior remain unchanged.
 
-## Consumer-facing API target
+## Consumer-facing API
 
-The creator workflow should be reduced to POST /api/v1/creators with this body:
+The creator workflow is:
 
-    { "username": "@creator" }
+`POST /api/v1/creators`
 
-The API normalizes the handle, creates or reuses the monitored profile, and schedules discovery. No OAuth start/callback/status endpoints are required for this workflow. Existing webhook payload shape should remain stable so consuming bots do not need platform-specific changes.
+```json
+{ "username": "@creator" }
+```
 
-## Deployment target
+The API normalizes the handle, creates or reuses the monitored profile and schedules discovery. OAuth endpoints remain only as temporary legacy compatibility routes; they are not used by this workflow.
 
-The Rust service and PostgreSQL remain in the existing Docker image and Pelican/Pterodactyl Egg. No Redis requirement is introduced. Any optional RSSHub-compatible endpoint is an internal deployment dependency only; the consumer bot never talks to RSS directly.
+## Deployment
+
+The Rust service and PostgreSQL remain in the existing Docker image and Pelican/Pterodactyl Egg. No Redis requirement is introduced. RSSHub fallback instances are configured by the operator default in the Egg; the consuming bot never talks to RSS directly.
 
 ## Rollout requirements
 
-Before removing the old OAuth path from a production deployment:
-1. implement and fixture-test the public embed parser;
-2. implement RSS 2.0 and Atom parsing for the fallback adapter;
-3. add migrations for source state, polling leases, watermark, and health counters;
-4. add scheduler tests for concurrency, cooldowns, backoff, source failover, and deduplication;
-5. validate against public profiles and record actual detection latency and block rates;
-6. update API/OpenAPI, Pelican Egg, README, and GitBook docs together.
+Before production deployment:
+
+1. compile, format and run all Rust tests and Clippy;
+2. verify the direct TikTok embed parser against fixture snapshots;
+3. verify RSSHub route availability and feed parsing against live public instances;
+4. test first-sync baseline, delayed posts, source failover, cooldown, concurrency and deduplication against PostgreSQL;
+5. record actual detection latency and source failure rates over a sustained test window;
+6. update GitBook docs and validate the Docker image on Pelican/Pterodactyl.
 
 No source should be described as unlimited or guaranteed. The goal is minimal user effort and resilient best-effort public monitoring.
