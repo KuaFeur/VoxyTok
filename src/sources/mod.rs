@@ -33,6 +33,7 @@ pub enum SourceFailure {
     Malformed(String),
 }
 
+#[derive(Clone)]
 pub struct TikTokPublicProfileSource {
     client: Client,
 }
@@ -116,6 +117,7 @@ impl TikTokPublicProfileSource {
     }
 }
 
+#[derive(Clone)]
 pub struct RssProfileSource {
     client: Client,
     base_url: Url,
@@ -154,6 +156,7 @@ impl RssProfileSource {
     }
 }
 
+#[derive(Clone)]
 pub enum SourceAdapter {
     TikTokPublicProfile(TikTokPublicProfileSource),
     RssHub(RssProfileSource),
