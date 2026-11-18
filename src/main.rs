@@ -293,7 +293,11 @@ async fn create_creator(
     }
     let creator = sqlx::query_as::<_, Creator>(
         "INSERT INTO creators (id, username, monitoring_started_at, next_poll_at) VALUES ($1, $2, NOW(), NOW())
-         ON CONFLICT (username) DO UPDATE SET username = EXCLUDED.username
+         ON CONFLICT (username) DO UPDATE SET
+            username = EXCLUDED.username,
+            enabled = CASE WHEN creators.tiktok_open_id IS NULL THEN TRUE ELSE creators.enabled END,
+            monitoring_started_at = CASE WHEN creators.tiktok_open_id IS NULL THEN COALESCE(creators.monitoring_started_at,NOW()) ELSE creators.monitoring_started_at END,
+            next_poll_at = CASE WHEN creators.tiktok_open_id IS NULL THEN COALESCE(creators.next_poll_at,NOW()) ELSE creators.next_poll_at END
          RETURNING id, username, display_name, enabled, created_at",
     )
     .bind(Uuid::new_v4()).bind(username).fetch_one(&state.db).await
