@@ -1108,8 +1108,8 @@ async fn main() -> anyhow::Result<()> {
         .redirect(reqwest::redirect::Policy::none())
         .user_agent("VoxyTok/0.3 (+https://github.com/KuaFeur/VoxyTok)")
         .build()?;
-    let mut public_sources: Vec<Arc<dyn sources::ProfileSource>> = Vec::new();
-    public_sources.push(Arc::new(sources::TikTokPublicProfileSource::new(http.clone())));
+    let mut public_sources: Vec<sources::SourceAdapter> = Vec::new();
+    public_sources.push(sources::SourceAdapter::TikTokPublicProfile(sources::TikTokPublicProfileSource::new(http.clone())));
     let rss_bases = env::var("RSSHUB_BASE_URLS")
         .unwrap_or_else(|_| "https://rsshub.app".to_owned());
     for raw_base in rss_bases.split(',').map(str::trim).filter(|value| !value.is_empty()) {
@@ -1117,7 +1117,7 @@ async fn main() -> anyhow::Result<()> {
         if base.scheme() != "https" || base.host_str().is_none() {
             anyhow::bail!("RSSHUB_BASE_URLS entries must be HTTPS URLs");
         }
-        public_sources.push(Arc::new(sources::RssProfileSource::new(http.clone(), base)));
+        public_sources.push(sources::SourceAdapter::RssHub(sources::RssProfileSource::new(http.clone(), base)));
     }
     let poll_interval_seconds = env::var("PUBLIC_POLL_INTERVAL_SECONDS")
         .unwrap_or_else(|_| "300".to_owned()).parse::<u64>()?.clamp(60, 3600);
