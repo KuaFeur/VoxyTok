@@ -21,6 +21,7 @@ use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 mod sources;
+mod public_monitor;
 
 type HmacSha256 = Hmac<Sha256>;
 const TIKTOK_AUTHORIZE_URL: &str = "https://www.tiktok.com/v2/auth/authorize/";
@@ -291,7 +292,7 @@ async fn create_creator(
         return Err(StatusCode::UNPROCESSABLE_ENTITY);
     }
     let creator = sqlx::query_as::<_, Creator>(
-        "INSERT INTO creators (id, username) VALUES ($1, $2)
+        "INSERT INTO creators (id, username, monitoring_started_at, next_poll_at) VALUES ($1, $2, NOW(), NOW())
          ON CONFLICT (username) DO UPDATE SET username = EXCLUDED.username
          RETURNING id, username, display_name, enabled, created_at",
     )
@@ -1107,12 +1108,29 @@ async fn main() -> anyhow::Result<()> {
         .redirect(reqwest::redirect::Policy::none())
         .user_agent("VoxyTok/0.3 (+https://github.com/KuaFeur/VoxyTok)")
         .build()?;
+    let mut public_sources: Vec<Arc<dyn sources::ProfileSource>> = Vec::new();
+    public_sources.push(Arc::new(sources::TikTokEmbedSource::new(http.clone())));
+    let rss_bases = env::var("RSSHUB_BASE_URLS")
+        .unwrap_or_else(|_| "https://rsshub.app".to_owned());
+    for raw_base in rss_bases.split(',').map(str::trim).filter(|value| !value.is_empty()) {
+        let base = Url::parse(raw_base)?;
+        if base.scheme() != "https" || base.host_str().is_none() {
+            anyhow::bail!("RSSHUB_BASE_URLS entries must be HTTPS URLs");
+        }
+        public_sources.push(Arc::new(sources::RssProfileSource::new(http.clone(), base)));
+    }
+    let poll_interval_seconds = env::var("PUBLIC_POLL_INTERVAL_SECONDS")
+        .unwrap_or_else(|_| "300".to_owned()).parse::<u64>()?.clamp(60, 3600);
+    let public_db = db.clone();
+    let public_poll_interval = Duration::from_secs(poll_interval_seconds);
+
     let state=AppState{
         db,api_token,webhook_url,webhook_secret,tiktok,http,
         token_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
     tokio::spawn(dispatch_loop(state.clone()));
     tokio::spawn(tiktok_poll_loop(state.clone()));
+    tokio::spawn(public_monitor::run(public_db, public_sources, public_poll_interval));
 
     let protected=Router::new()
         .route("/creators",post(create_creator).get(list_creators))
