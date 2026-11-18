@@ -35,26 +35,26 @@ fn failure_details(error: &SourceFailure) -> (String, String, i64) {
 }
 
 async fn source_is_cooling_down(db: &PgPool, creator_id: Uuid, source_key: &str) -> anyhow::Result<bool> {
-    let next: Option<DateTime<Utc>> = sqlx::query_scalar::<_, DateTime<Utc>>(
-        "SELECT COALESCE(next_attempt_at,NOW()) FROM creator_source_states WHERE creator_id=$1 AND source_key=$2 AND status='cooldown'"
-    ).bind(creator_id).bind(source_key).fetch_optional(db).await?;
-    Ok(next.is_some_and(|at| at > Utc::now()))
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM creator_source_states WHERE creator_id=$1 AND source_key=$2 AND status='cooldown' AND next_attempt_at>NOW())"
+    ).bind(creator_id).bind(source_key).fetch_one(db).await.map_err(Into::into)
 }
 
-async fn host_is_cooling_down(db: &PgPool, source_key: &str) -> anyhow::Result<bool> {
-    let next: Option<DateTime<Utc>> = sqlx::query_scalar(
-        "SELECT next_attempt_at FROM source_host_states WHERE host_key=$1"
-    ).bind(source_key).fetch_optional(db).await?;
-    Ok(next.is_some_and(|at| at > Utc::now()))
+async fn host_is_cooling_down(db: &PgPool, host_key: &str) -> anyhow::Result<bool> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM source_host_states WHERE host_key=$1 AND next_attempt_at>NOW())"
+    ).bind(host_key).fetch_one(db).await.map_err(Into::into)
 }
 
-async fn record_host_success(db: &PgPool, source_key: &str) -> anyhow::Result<()> {
-    sqlx::query("DELETE FROM source_host_states WHERE host_key=$1")
-        .bind(source_key).execute(db).await?;
+async fn record_host_success(db: &PgPool, host_key: &str) -> anyhow::Result<()> {
+    // A request may have started before another creator recorded a new 429.
+    // Never let that in-flight success erase an active host-wide cooldown.
+    sqlx::query("DELETE FROM source_host_states WHERE host_key=$1 AND next_attempt_at<=NOW()")
+        .bind(host_key).execute(db).await?;
     Ok(())
 }
 
-async fn record_host_failure(db: &PgPool, source_key: &str, error: &SourceFailure) -> anyhow::Result<()> {
+async fn record_host_failure(db: &mut sqlx::Transaction<'_, sqlx::Postgres>, host_key: &str, error: &SourceFailure) -> anyhow::Result<()> {
     if matches!(error, SourceFailure::NotFound | SourceFailure::Malformed(_)) {
         return Ok(());
     }
@@ -63,9 +63,9 @@ async fn record_host_failure(db: &PgPool, source_key: &str, error: &SourceFailur
         r#"INSERT INTO source_host_states (host_key,next_attempt_at,consecutive_failures,last_error,updated_at)
         VALUES ($1,NOW()+($2*INTERVAL '1 second'),1,$3,NOW())
         ON CONFLICT (host_key) DO UPDATE SET
-        next_attempt_at=NOW()+(GREATEST($2,LEAST(60 * (1 << LEAST(source_host_states.consecutive_failures,10)),21600))*INTERVAL '1 second'),
+        next_attempt_at=GREATEST(source_host_states.next_attempt_at,NOW()+(GREATEST($2,LEAST(60 * (1 << LEAST(source_host_states.consecutive_failures,10)),21600))*INTERVAL '1 second')),
         consecutive_failures=source_host_states.consecutive_failures+1,last_error=$3,updated_at=NOW()"#
-    ).bind(source_key).bind(retry_after).bind(format!("{error:?}")).execute(db).await?;
+    ).bind(host_key).bind(retry_after).bind(format!("{error:?}")).execute(&mut **db).await?;
     Ok(())
 }
 
@@ -81,12 +81,14 @@ async fn record_source_success(db: &PgPool, creator_id: Uuid, source_key: &str, 
 
 async fn record_source_failure(db: &PgPool, creator_id: Uuid, source_key: &str, host_key: &str, error: &SourceFailure) -> anyhow::Result<()> {
     let (code, message, delay) = failure_details(error);
+    let mut tx = db.begin().await?;
     sqlx::query(
         r#"INSERT INTO creator_source_states (creator_id,source_key,status,last_attempt_at,next_attempt_at,consecutive_failures,total_failures,last_error_code,last_error,updated_at)
         VALUES ($1,$2,'cooldown',NOW(),NOW()+($3*INTERVAL '1 second'),1,1,$4,$5,NOW())
         ON CONFLICT (creator_id,source_key) DO UPDATE SET status='cooldown',last_attempt_at=NOW(),next_attempt_at=NOW()+(GREATEST($3,LEAST(60 * (1 << LEAST(creator_source_states.consecutive_failures,10)),21600))*INTERVAL '1 second'),consecutive_failures=creator_source_states.consecutive_failures+1,total_failures=creator_source_states.total_failures+1,last_error_code=$4,last_error=$5,updated_at=NOW()"#
-    ).bind(creator_id).bind(source_key).bind(delay).bind(code).bind(message).execute(db).await?;
-    record_host_failure(db, host_key, error).await?;
+    ).bind(creator_id).bind(source_key).bind(delay).bind(code).bind(message).execute(&mut *tx).await?;
+    record_host_failure(&mut tx, host_key, error).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -140,10 +142,9 @@ async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfil
 }
 
 async fn poll_one(db: &PgPool, creator: DueCreator, sources: &[SourceAdapter], poll_interval: Duration) -> anyhow::Result<()> {
-    let lease = sqlx::query_scalar::<_, Uuid>(
-        "UPDATE creators SET poll_lease_until=NOW()+INTERVAL '2 minutes' WHERE id=$1 AND next_poll_at<=NOW() AND (poll_lease_until IS NULL OR poll_lease_until<NOW()) RETURNING id"
-    ).bind(creator.id).fetch_optional(db).await?;
-    if lease.is_none() { return Ok(()); }
+    let Some(creator) = sqlx::query_as::<_, DueCreator>(
+        "UPDATE creators SET poll_lease_until=NOW()+INTERVAL '2 minutes' WHERE id=$1 AND enabled=TRUE AND tiktok_open_id IS NULL AND next_poll_at<=NOW() AND (poll_lease_until IS NULL OR poll_lease_until<NOW()) RETURNING id,username,display_name,last_polled_at,monitoring_started_at,poll_failures"
+    ).bind(creator.id).fetch_optional(db).await? else { return Ok(()); };
     let mut last_error = None;
     for source in sources {
         let source_key = source.key();
@@ -159,7 +160,9 @@ async fn poll_one(db: &PgPool, creator: DueCreator, sources: &[SourceAdapter], p
             }
             Err(error) => {
                 tracing::warn!(creator=%creator.username, source=%source_key, ?error, "public profile source failed; trying next adapter");
-                record_source_failure(db, creator.id, &source_key, &host_key, &error).await?;
+                if let Err(write_error) = record_source_failure(db, creator.id, &source_key, &host_key, &error).await {
+                    tracing::error!(%write_error, creator=%creator.username, source=%source_key, "could not persist source cooldown; continuing with fallback adapters");
+                }
                 last_error = Some(format!("{}: {:?}", source_key, error));
             }
         }
