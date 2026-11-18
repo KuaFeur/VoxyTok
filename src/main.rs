@@ -1083,7 +1083,7 @@ async fn main() -> anyhow::Result<()> {
     const MIGRATION_LOCK_ID: i64 = 7_604_202_611;
     sqlx::query("SELECT pg_advisory_lock($1)")
         .bind(MIGRATION_LOCK_ID)
-        .execute(&mut *migration_connection).await?;
+        .fetch_one(&mut *migration_connection).await?;
     let migration_result: anyhow::Result<()> = async {
         sqlx::raw_sql(include_str!("../migrations/0001_initial.sql")).execute(&mut *migration_connection).await?;
         sqlx::raw_sql(include_str!("../migrations/0002_single_instance_outbox.sql")).execute(&mut *migration_connection).await?;
@@ -1096,7 +1096,7 @@ async fn main() -> anyhow::Result<()> {
     }.await;
     let unlock_result = sqlx::query("SELECT pg_advisory_unlock($1)")
         .bind(MIGRATION_LOCK_ID)
-        .execute(&mut *migration_connection).await;
+        .fetch_one(&mut *migration_connection).await;
     migration_result?;
     unlock_result?;
 
