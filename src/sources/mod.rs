@@ -120,11 +120,16 @@ impl TikTokPublicProfileSource {
         }
         let html = response.text().await
             .map_err(|error| SourceFailure::TemporarilyUnavailable(error.to_string()))?;
+        self.parse_response_body(handle, &html)
+            .map_err(|error| SourceFailure::Malformed(error.to_string()))
+    }
+
+    fn parse_response_body(&self, username: &str, html: &str) -> Result<PublicProfile> {
         let lower_html = html.to_ascii_lowercase();
         if html.contains("_wafchallengeid") || (lower_html.contains("captcha") && !html.contains("__FRONTITY_CONNECT_STATE__")) {
-            return Err(SourceFailure::Challenge);
+            bail!("TikTok returned an access challenge");
         }
-        self.parse(handle, &html).map_err(|error| SourceFailure::Malformed(error.to_string()))
+        self.parse(username, html)
     }
 }
 
@@ -215,6 +220,9 @@ fn parse_feed(username: &str, xml: &str) -> Result<PublicProfile> {
     if root != "rss" && !is_atom {
         bail!("response root is neither RSS nor Atom");
     }
+    if is_atom && !root_declares_atom_namespace(xml)? {
+        bail!("Atom feed root does not declare the Atom namespace");
+    }
     let entries = if is_atom { split_elements(xml, "entry") } else { split_elements(xml, "item") };
     let mut videos = Vec::new();
     for entry in entries {
@@ -240,6 +248,20 @@ fn parse_feed(username: &str, xml: &str) -> Result<PublicProfile> {
         });
     }
     Ok(PublicProfile { username: username.trim_start_matches('@').to_owned(), display_name: None, avatar_url: None, videos })
+}
+
+fn root_declares_atom_namespace(xml: &str) -> Result<bool> {
+    let start = xml.find('<').ok_or_else(|| anyhow!("XML document has no root element"))?;
+    let rest = &xml[start..];
+    let end = rest.find('>').ok_or_else(|| anyhow!("unterminated XML root element"))?;
+    let header = &rest[1..end];
+    let qualified = header.split_whitespace().next().unwrap_or_default();
+    let namespace_attribute = if let Some((prefix, _)) = qualified.split_once(':') {
+        format!("xmlns:{prefix}=\"http://www.w3.org/2005/Atom\"")
+    } else {
+        "xmlns=\"http://www.w3.org/2005/Atom\"".to_owned()
+    };
+    Ok(header.contains(&namespace_attribute))
 }
 
 // Validate well-formed element nesting and return the document root's local name.
@@ -277,7 +299,8 @@ fn validate_xml_document(xml: &str) -> Result<String> {
         let local = qualified.rsplit(':').next().unwrap_or(qualified).to_owned();
         let mut quote = None;
         let mut tag_end = None;
-        for (index, ch) in rest.char_indices().skip(name_end) {
+        for (relative_index, ch) in rest[name_end..].char_indices() {
+            let index = name_end + relative_index;
             if let Some(q) = quote {
                 if ch == q { quote = None; }
             } else if ch == '"' || ch == '\'' {
@@ -307,8 +330,6 @@ fn validate_xml_document(xml: &str) -> Result<String> {
 }
 
 fn split_elements<'a>(xml: &'a str, name: &str) -> Vec<&'a str> {
-    let open = format!("<{name}");
-    let close = format!("</{name}>");
     let mut result = Vec::new();
     let mut rest = xml;
     while let Some(start) = rest.find('<') {
@@ -403,10 +424,10 @@ mod tests {
         let client = Client::builder().build().unwrap();
         let source = TikTokPublicProfileSource::new(client);
         let public_html = r#"<script id="__FRONTITY_CONNECT_STATE__" type="application/json">{"userInfo":{"uniqueId":"demo","nickname":"Demo","privateAccount":false},"videoList":[{"id":"123","desc":"this account is private"}]}</script>"#;
-        assert!(source.parse("demo", public_html).is_ok());
+        assert!(source.parse_response_body("demo", public_html).is_ok());
 
         let private_html = r#"<script id="__FRONTITY_CONNECT_STATE__" type="application/json">{"userInfo":{"uniqueId":"demo","privateAccount":true},"videoList":[]}</script>"#;
-        assert!(source.parse("demo", private_html).is_err());
+        assert!(source.parse_response_body("demo", private_html).is_err());
     }
 
     #[test]
@@ -429,7 +450,8 @@ mod tests {
         let parsed = parse_feed("demo", prefixed).unwrap();
         assert_eq!(parsed.videos[0].id, "789");
         assert_eq!(parse_retry_after(Some("120")).unwrap(), Duration::from_secs(120));
-        assert!(parse_retry_after(Some("Wed, 18 Nov 2026 00:00:00 GMT")).is_some());
+        let future = (Utc::now() + chrono::Duration::days(1)).to_rfc2822();
+        assert!(parse_retry_after(Some(&future)).is_some());
     }
 
     #[test]
@@ -437,7 +459,7 @@ mod tests {
         let rss = r#"<rss><channel><item><title>One</title><guid>https://www.tiktok.com/@demo/video/123</guid><link>https://www.tiktok.com/@demo/video/123</link><pubDate>Wed, 18 Nov 2026 00:00:00 +0000</pubDate></item></channel></rss>"#;
         let profile = parse_feed("demo", rss).unwrap();
         assert_eq!(profile.videos[0].id, "123");
-        let atom = r#"<feed><entry><title>Two</title><id>https://www.tiktok.com/@demo/video/456</id><link href="https://www.tiktok.com/@demo/video/456"/><updated>2026-11-18T00:00:00Z</updated></entry></feed>"#;
+        let atom = r#"<atom:feed xmlns:atom="http://www.w3.org/2005/Atom"><atom:entry><atom:title>Two</atom:title><atom:id>https://www.tiktok.com/@demo/video/456</atom:id><atom:link href="https://www.tiktok.com/@demo/video/456"/><atom:updated>2026-11-18T00:00:00Z</atom:updated></atom:entry></atom:feed>"#;
         let profile = parse_feed("demo", atom).unwrap();
         assert_eq!(profile.videos[0].id, "456");
     }
