@@ -20,6 +20,8 @@ use subtle::ConstantTimeEq;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+mod sources;
+
 type HmacSha256 = Hmac<Sha256>;
 const TIKTOK_AUTHORIZE_URL: &str = "https://www.tiktok.com/v2/auth/authorize/";
 const TIKTOK_TOKEN_URL: &str = "https://open.tiktokapis.com/v2/oauth/token/";
