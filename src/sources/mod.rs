@@ -28,7 +28,6 @@ pub enum SourceFailure {
     RateLimited { retry_after: Option<Duration> },
     TemporarilyUnavailable(String),
     NotFound,
-    PrivateOrUnavailable,
     Challenge,
     Malformed(String),
 }
@@ -42,7 +41,7 @@ impl TikTokPublicProfileSource {
     pub fn new(client: Client) -> Self { Self { client } }
 
     fn parse(&self, username: &str, html: &str) -> Result<PublicProfile> {
-        let marker = "id=\"__FRONTITY_CONNECT_STATE__\"";
+        let marker = "id=\\"__FRONTITY_CONNECT_STATE__\\"";
         let marker_pos = html.find(marker).ok_or_else(|| anyhow!("TikTok embed state script is missing"))?;
         let script_start = html[marker_pos..].find('>').map(|n| marker_pos + n + 1)
             .ok_or_else(|| anyhow!("TikTok embed state script has no opening delimiter"))?;
@@ -167,7 +166,7 @@ pub enum SourceAdapter {
 impl SourceAdapter {
     pub fn key(&self) -> String {
         match self {
-            Self::TikTokPublicProfile(_) => "tiktok_public_profile".to_owned(),
+            Self::TikTokPublicProfile(_) => "tiktok.com".to_owned(),
             Self::RssHub(source) => format!("rsshub:{}", source.base_url.host_str().unwrap_or("unknown")),
         }
     }
