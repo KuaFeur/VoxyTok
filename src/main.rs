@@ -20,6 +20,9 @@ use subtle::ConstantTimeEq;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+mod sources;
+mod public_monitor;
+
 type HmacSha256 = Hmac<Sha256>;
 const TIKTOK_AUTHORIZE_URL: &str = "https://www.tiktok.com/v2/auth/authorize/";
 const TIKTOK_TOKEN_URL: &str = "https://open.tiktokapis.com/v2/oauth/token/";
@@ -43,6 +46,7 @@ struct AppState {
     webhook_url: Option<String>,
     webhook_secret: Option<String>,
     tiktok: Option<TikTokConfig>,
+    public_source_count: usize,
     http: Client,
     token_refresh_lock: Arc<tokio::sync::Mutex<()>>,
 }
@@ -53,6 +57,8 @@ struct HealthResponse {
     service: &'static str,
     webhook_configured: bool,
     tiktok_provider_configured: bool,
+    public_monitor_configured: bool,
+    public_source_count: usize,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -248,6 +254,8 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
         service: "voxytok",
         webhook_configured: state.webhook_url.is_some(),
         tiktok_provider_configured: state.tiktok.is_some(),
+        public_monitor_configured: state.public_source_count > 0,
+        public_source_count: state.public_source_count,
     })
 }
 
@@ -259,6 +267,8 @@ async fn readiness(State(state): State<AppState>) -> Result<Json<HealthResponse>
         service: "voxytok",
         webhook_configured: state.webhook_url.is_some(),
         tiktok_provider_configured: state.tiktok.is_some(),
+        public_monitor_configured: state.public_source_count > 0,
+        public_source_count: state.public_source_count,
     }))
 }
 
@@ -289,8 +299,12 @@ async fn create_creator(
         return Err(StatusCode::UNPROCESSABLE_ENTITY);
     }
     let creator = sqlx::query_as::<_, Creator>(
-        "INSERT INTO creators (id, username) VALUES ($1, $2)
-         ON CONFLICT (username) DO UPDATE SET username = EXCLUDED.username
+        "INSERT INTO creators (id, username, monitoring_started_at, next_poll_at) VALUES ($1, $2, NOW(), NOW())
+         ON CONFLICT (username) DO UPDATE SET
+            username = EXCLUDED.username,
+            enabled = CASE WHEN creators.tiktok_open_id IS NULL THEN TRUE ELSE creators.enabled END,
+            monitoring_started_at = CASE WHEN creators.tiktok_open_id IS NULL THEN COALESCE(creators.monitoring_started_at,NOW()) ELSE creators.monitoring_started_at END,
+            next_poll_at = CASE WHEN creators.tiktok_open_id IS NULL THEN COALESCE(creators.next_poll_at,NOW()) ELSE creators.next_poll_at END
          RETURNING id, username, display_name, enabled, created_at",
     )
     .bind(Uuid::new_v4()).bind(username).fetch_one(&state.db).await
@@ -1068,6 +1082,7 @@ async fn main() -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!("../migrations/0003_tiktok_oauth.sql")).execute(&db).await?;
     sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await?;
     sqlx::raw_sql(include_str!("../migrations/0005_oauth_connection_tracking.sql")).execute(&db).await?;
+    sqlx::raw_sql(include_str!("../migrations/0006_public_profile_sources.sql")).execute(&db).await?;
 
     let webhook_url=env::var("WEBHOOK_URL").ok().filter(|value|!value.trim().is_empty());
     if let Some(url)=&webhook_url { validate_webhook_url(url)?; }
@@ -1104,12 +1119,30 @@ async fn main() -> anyhow::Result<()> {
         .redirect(reqwest::redirect::Policy::none())
         .user_agent("VoxyTok/0.3 (+https://github.com/KuaFeur/VoxyTok)")
         .build()?;
+    let mut public_sources: Vec<sources::SourceAdapter> = Vec::new();
+    public_sources.push(sources::SourceAdapter::TikTokPublicProfile(sources::TikTokPublicProfileSource::new(http.clone())));
+    let rss_bases = env::var("RSSHUB_BASE_URLS")
+        .unwrap_or_else(|_| "https://rsshub.app,https://rsshub.rssforever.com,https://rsshub.joshrandall.net".to_owned());
+    for raw_base in rss_bases.split(',').map(str::trim).filter(|value| !value.is_empty()) {
+        let base = Url::parse(raw_base)?;
+        if base.scheme() != "https" || base.host_str().is_none() {
+            anyhow::bail!("RSSHUB_BASE_URLS entries must be HTTPS URLs");
+        }
+        public_sources.push(sources::SourceAdapter::RssHub(sources::RssProfileSource::new(http.clone(), base)));
+    }
+    let poll_interval_seconds = env::var("PUBLIC_POLL_INTERVAL_SECONDS")
+        .unwrap_or_else(|_| "300".to_owned()).parse::<u64>()?.clamp(60, 3600);
+    let public_source_count = public_sources.len();
+    let public_db = db.clone();
+    let public_poll_interval = Duration::from_secs(poll_interval_seconds);
+
     let state=AppState{
-        db,api_token,webhook_url,webhook_secret,tiktok,http,
+        db,api_token,webhook_url,webhook_secret,tiktok,public_source_count,http,
         token_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
     tokio::spawn(dispatch_loop(state.clone()));
     tokio::spawn(tiktok_poll_loop(state.clone()));
+    tokio::spawn(public_monitor::run(public_db, public_sources, public_poll_interval));
 
     let protected=Router::new()
         .route("/creators",post(create_creator).get(list_creators))
@@ -1192,6 +1225,7 @@ mod tests {
         sqlx::raw_sql(include_str!("../migrations/0003_tiktok_oauth.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0005_oauth_connection_tracking.sql")).execute(&db).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0006_public_profile_sources.sql")).execute(&db).await.unwrap();
 
         let creator_id = Uuid::new_v4();
         let username = format!("ci_{}", Uuid::new_v4().simple());
