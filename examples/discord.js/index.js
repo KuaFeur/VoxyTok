@@ -6,6 +6,7 @@ import {
   Client,
   EmbedBuilder,
   GatewayIntentBits,
+  PermissionFlagsBits,
   REST,
   Routes,
   SlashCommandBuilder,
@@ -44,6 +45,7 @@ await pool.query(`
 const addCommand = new SlashCommandBuilder()
   .setName("tiktok-add")
   .setDescription("Monitor a public TikTok profile")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addStringOption((option) =>
     option
       .setName("username")
@@ -56,6 +58,7 @@ const addCommand = new SlashCommandBuilder()
 const removeCommand = new SlashCommandBuilder()
   .setName("tiktok-remove")
   .setDescription("Stop monitoring a TikTok profile")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addStringOption((option) =>
     option
       .setName("username")
@@ -67,7 +70,8 @@ const removeCommand = new SlashCommandBuilder()
 
 const listCommand = new SlashCommandBuilder()
   .setName("tiktok-list")
-  .setDescription("List monitored TikTok profiles");
+  .setDescription("List monitored TikTok profiles")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 const route = process.env.DISCORD_GUILD_ID
