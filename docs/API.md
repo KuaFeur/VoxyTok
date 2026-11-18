@@ -122,9 +122,9 @@ Verify HMAC-SHA256 over the exact raw body before JSON parsing. Delivery is at-l
 
 RSS is an internal acquisition format only. VoxyTok does not expose an RSS URL to consuming bots. The service polls independent adapters, normalizes their results and deduplicates by creator/video ID before webhook delivery.
 
-The initial adapters are:
-- TikTok public profile hydration data.
-- RSSHub-compatible RSS/Atom feeds (fallback).
+The initial retrieval paths are:
+- TikTok public embed hydration data.
+- RSSHub-compatible RSS/Atom feeds from multiple configured instances (fallback). RSSHub's route also uses TikTok's embed page, so the instances are separate intermediaries/caches rather than independent TikTok data providers.
 
 The scheduler applies source-specific cooldowns, honors `Retry-After`, backs off after failures and skips sources in cooldown. It never claims that any public source is unlimited or guaranteed. A TikTok challenge, profile privacy change or upstream outage can delay detection.
 
