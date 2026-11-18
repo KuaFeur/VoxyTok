@@ -75,16 +75,16 @@ An empty list means no source has attempted this creator yet. After the next pol
 This authenticated test event exercises the outbox, HTTP delivery, HMAC signature and receiver. It does not prove that TikTok retrieval works. Generate the test identifiers once and reuse them unchanged when repeating the request to verify deduplication.
 
 ```bash
-export TEST_VIDEO_ID="$TEST_VIDEO_ID"
-export TEST_PUBLISHED_AT="$TEST_PUBLISHED_AT"
+export TEST_VIDEO_ID="voxytok-v1-test-$(date +%s)"
+export TEST_PUBLISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 curl --fail --show-error -X POST \
   -H "Authorization: Bearer $VOXYTOK_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d "{
     \"creator_id\": \"$CREATOR_ID\",
-    \"platform_video_id\": \"voxytok-v1-test-$(date +%s)\",
-    \"published_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
+    \"platform_video_id\": \"$TEST_VIDEO_ID\",
+    \"published_at\": \"$TEST_PUBLISHED_AT\",
     \"payload\": {
       \"event\": \"tiktok.video.published\",
       \"provider\": \"manual_test\",
@@ -100,7 +100,7 @@ curl --fail --show-error -X POST \
   "$VOXYTOK_URL/api/v1/events"
 ```
 
-Expected: HTTP 202 and `duplicate:false`. The configured receiver should accept the signed request and show the test notification. Repeat the exact request with the same `platform_video_id`: expect HTTP 200 and `duplicate:true`, with no second delivery.
+Expected: HTTP 202 and `duplicate:false`. The configured receiver should accept the signed request and show the test notification. Repeat the exact same curl command without regenerating `TEST_VIDEO_ID` or `TEST_PUBLISHED_AT`: expect HTTP 200 and `duplicate:true`, with no second delivery.
 
 Inspect delivery state:
 
