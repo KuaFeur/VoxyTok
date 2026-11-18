@@ -1,5 +1,5 @@
 {
-  "_comment": "VoxyTok - one isolated instance for one bot/application, with embedded PostgreSQL",
+  "_comment": "VoxyTok - one isolated instance for one bot/application, with embedded PostgreSQL and multi-source public profile monitoring",
   "meta": {
     "version": "PTDL_v2",
     "update_url": null
@@ -7,7 +7,7 @@
   "exported_at": "2026-11-17T00:00:00+00:00",
   "name": "VoxyTok",
   "author": "Kua <https://github.com/KuaFeur>",
-  "description": "Official TikTok Display API gateway. Each creator explicitly authorizes this one bot instance. PostgreSQL is bundled.",
+  "description": "Public TikTok profile monitoring gateway. Add creators by username only; multi-source polling and embedded PostgreSQL included. No creator OAuth or video submission required.",
   "features": null,
   "docker_images": {
     "ghcr.io/kuafeur/voxytok:latest": "ghcr.io/kuafeur/voxytok:latest"
@@ -119,44 +119,24 @@
       "field_type": "password"
     },
     {
-      "name": "TikTok Client Key",
-      "description": "TikTok for Developers app client key (Login Kit + Display API).",
-      "env_variable": "TIKTOK_CLIENT_KEY",
-      "default_value": "",
+      "name": "Public profile polling interval (seconds)",
+      "description": "Default is 300 seconds (5 minutes). Allowed range: 60-3600. Best-effort polling; upstream sources may delay detection.",
+      "env_variable": "PUBLIC_POLL_INTERVAL_SECONDS",
+      "default_value": "300",
       "user_viewable": false,
-      "user_editable": true,
-      "rules": "nullable|string|max:255",
+      "user_editable": false,
+      "rules": "required|integer|between:60,3600",
       "field_type": "text"
     },
     {
-      "name": "TikTok Client Secret",
-      "description": "TikTok developer app secret. Stored only in server environment.",
-      "env_variable": "TIKTOK_CLIENT_SECRET",
-      "default_value": "",
+      "name": "RSSHub fallback sources",
+      "description": "Comma-separated HTTPS RSSHub-compatible base URLs. Defaults to the public RSSHub instance; the direct TikTok public-profile adapter is always enabled.",
+      "env_variable": "RSSHUB_BASE_URLS",
+      "default_value": "https://rsshub.app",
       "user_viewable": false,
-      "user_editable": true,
-      "rules": "nullable|string|max:255",
-      "field_type": "password"
-    },
-    {
-      "name": "TikTok OAuth Redirect URI",
-      "description": "Exact HTTPS callback URL registered in TikTok for Developers.",
-      "env_variable": "TIKTOK_REDIRECT_URI",
-      "default_value": "",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|url|max:512",
+      "user_editable": false,
+      "rules": "required|string|max:2048",
       "field_type": "text"
-    },
-    {
-      "name": "Token Encryption Key",
-      "description": "32-byte AES-256-GCM key as 64 hex characters. Generate once and back it up; losing it requires creators to reconnect.",
-      "env_variable": "TOKEN_ENCRYPTION_KEY",
-      "default_value": "",
-      "user_viewable": false,
-      "user_editable": true,
-      "rules": "nullable|regex:/^[A-Fa-f0-9]{64}$/",
-      "field_type": "password"
     }
   ]
 }
