@@ -9,14 +9,14 @@ This runbook describes how to deploy VoxyTok on a Pelican/Wings node. It does no
 - Source commit: `e2ab3b59f378141e35078fa79384ea6123802c09`
 - GitHub Actions run: [CI #120](https://github.com/KuaFeur/VoxyTok/actions/runs/44390200642)
 
-The digest above identifies the image published by the successful main-branch CI run. The main-branch workflow publishes `:latest` only after its Rust checks, container build and embedded-PostgreSQL/HTTP smoke tests succeed. **There is also a separate tag workflow:** pushing a `v*` tag publishes both that version tag and `:latest` without depending on the main-branch CI workflow. Therefore, a tag-triggered `:latest` update is not evidence that those checks passed. For production, deploy a digest whose source commit and successful CI run you have independently verified; do not assume the moving `:latest` tag is always validated.
+The digest above identifies the last image published by the successful main-branch CI run. The main-branch workflow publishes `:latest` only after its Rust checks, container build and embedded-PostgreSQL/HTTP smoke tests succeed. The release-tag workflow also requires a successful main-branch CI run for the exact commit being tagged. Stable version tags may update `:latest`; prerelease tags such as `v1.0.0-rc.1` publish the prerelease image without replacing `:latest`. For production, deploy a digest whose source commit and successful CI run you have independently verified; do not assume the moving `:latest` tag is always validated.
 
 **The package's anonymous-pull visibility has not been verified.** GitHub documents that a newly published container package defaults to private; before using it from Pelican without registry credentials, open the repository's Packages section, open `voxytok`, then Package settings and set visibility to Public. Alternatively, configure authenticated GHCR pulls on the Wings host. See [GitHub's container-registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry). The digest is immutable; `:latest` is a moving tag.
 
 For a reproducible deployment, use the digest reference if the Pelican Docker image field accepts it:
 
 ```text
-ghcr.io/kuafeur/voxytok@sha256:28ab3efb59d851709f7901c43891a66c438854e122b73cf9deecfe0fdb612d5e
+ghcr.io/kuafeur/voxytok@sha256:ae68d06314752b4a8dfc80dd98cd0a886dfc77963e8c4ecdc076a715cd59f98e
 ```
 
 Otherwise use a version tag only after verifying its source commit and CI status, or use `:latest` only after independently verifying the image digest against a successful main-branch CI run.
