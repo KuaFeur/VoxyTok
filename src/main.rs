@@ -68,11 +68,32 @@ struct Creator {
     display_name: Option<String>,
     enabled: bool,
     created_at: DateTime<Utc>,
+    last_successful_poll_at: Option<DateTime<Utc>>,
+    next_poll_at: Option<DateTime<Utc>>,
+    poll_failures: i32,
+    last_error: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct CreateCreator {
     username: String,
+}
+
+#[derive(Serialize, FromRow)]
+struct CreatorSourceState {
+    source_key: String,
+    status: String,
+    last_attempt_at: Option<DateTime<Utc>>,
+    last_success_at: Option<DateTime<Utc>>,
+    next_attempt_at: Option<DateTime<Utc>>,
+    consecutive_failures: i32,
+    total_failures: i64,
+    total_successes: i64,
+    last_latency_ms: Option<i64>,
+    last_http_status: Option<i32>,
+    last_error_code: Option<String>,
+    last_error: Option<String>,
+    updated_at: DateTime<Utc>,
 }
 
 #[derive(Deserialize)]
@@ -305,7 +326,8 @@ async fn create_creator(
             enabled = CASE WHEN creators.tiktok_open_id IS NULL THEN TRUE ELSE creators.enabled END,
             monitoring_started_at = CASE WHEN creators.tiktok_open_id IS NULL THEN COALESCE(creators.monitoring_started_at,NOW()) ELSE creators.monitoring_started_at END,
             next_poll_at = CASE WHEN creators.tiktok_open_id IS NULL THEN COALESCE(creators.next_poll_at,NOW()) ELSE creators.next_poll_at END
-         RETURNING id, username, display_name, enabled, created_at",
+         RETURNING id, username, display_name, enabled, created_at,
+                   last_successful_poll_at, next_poll_at, poll_failures, last_error",
     )
     .bind(Uuid::new_v4()).bind(username).fetch_one(&state.db).await
     .map_err(|error| { tracing::error!(%error, "could not create creator"); StatusCode::INTERNAL_SERVER_ERROR })?;
@@ -314,10 +336,31 @@ async fn create_creator(
 
 async fn list_creators(State(state): State<AppState>) -> Result<Json<Vec<Creator>>, StatusCode> {
     let creators = sqlx::query_as::<_, Creator>(
-        "SELECT id, username, display_name, enabled, created_at FROM creators ORDER BY created_at DESC",
+        "SELECT id, username, display_name, enabled, created_at,
+                last_successful_poll_at, next_poll_at, poll_failures, last_error
+         FROM creators ORDER BY created_at DESC",
     ).fetch_all(&state.db).await
         .map_err(|error| { tracing::error!(%error, "could not list creators"); StatusCode::INTERNAL_SERVER_ERROR })?;
     Ok(Json(creators))
+}
+
+async fn list_creator_sources(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<CreatorSourceState>>, StatusCode> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM creators WHERE id=$1)",
+    ).bind(id).fetch_one(&state.db).await
+        .map_err(|error| { tracing::error!(%error, "could not inspect creator before listing source status"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    if !exists { return Err(StatusCode::NOT_FOUND); }
+    let rows = sqlx::query_as::<_, CreatorSourceState>(
+        "SELECT source_key,status,last_attempt_at,last_success_at,next_attempt_at,
+         consecutive_failures,total_failures,total_successes,last_latency_ms,
+         last_http_status,last_error_code,last_error,updated_at
+         FROM creator_source_states WHERE creator_id=$1 ORDER BY source_key",
+    ).bind(id).fetch_all(&state.db).await
+        .map_err(|error| { tracing::error!(%error, "could not list creator source status"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    Ok(Json(rows))
 }
 
 async fn delete_creator(
@@ -1163,6 +1206,7 @@ async fn main() -> anyhow::Result<()> {
     let protected=Router::new()
         .route("/creators",post(create_creator).get(list_creators))
         .route("/creators/{id}",delete(delete_creator))
+        .route("/creators/{id}/sources",get(list_creator_sources))
         .route("/events",post(ingest_event).get(list_events))
         .route("/events/{id}/retry",post(retry_delivery))
         .route("/oauth/tiktok/start",post(start_tiktok_oauth))
