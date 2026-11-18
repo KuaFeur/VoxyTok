@@ -33,12 +33,6 @@ pub enum SourceFailure {
     Malformed(String),
 }
 
-#[allow(async_fn_in_trait)]
-pub trait ProfileSource: Send + Sync {
-    fn key(&self) -> &'static str;
-    async fn fetch_profile(&self, username: &str) -> std::result::Result<PublicProfile, SourceFailure>;
-}
-
 pub struct TikTokPublicProfileSource {
     client: Client,
 }
@@ -89,10 +83,8 @@ impl TikTokPublicProfileSource {
     }
 }
 
-impl ProfileSource for TikTokPublicProfileSource {
-    fn key(&self) -> &'static str { "tiktok_public_profile" }
-
-    async fn fetch_profile(&self, username: &str) -> std::result::Result<PublicProfile, SourceFailure> {
+impl TikTokPublicProfileSource {
+    pub async fn fetch_profile(&self, username: &str) -> std::result::Result<PublicProfile, SourceFailure> {
         let handle = username.trim_start_matches('@');
         let url = format!("https://www.tiktok.com/@{handle}");
         let response = self.client.get(url).send().await
@@ -140,10 +132,8 @@ impl RssProfileSource {
     }
 }
 
-impl ProfileSource for RssProfileSource {
-    fn key(&self) -> &'static str { "rsshub" }
-
-    async fn fetch_profile(&self, username: &str) -> std::result::Result<PublicProfile, SourceFailure> {
+impl RssProfileSource {
+    pub async fn fetch_profile(&self, username: &str) -> std::result::Result<PublicProfile, SourceFailure> {
         let url = self.feed_url(username).map_err(|e| SourceFailure::Malformed(e.to_string()))?;
         let response = self.client.get(url).send().await
             .map_err(|error| SourceFailure::TemporarilyUnavailable(error.to_string()))?;
@@ -161,6 +151,27 @@ impl ProfileSource for RssProfileSource {
         let xml = response.text().await
             .map_err(|error| SourceFailure::TemporarilyUnavailable(error.to_string()))?;
         parse_feed(username, &xml).map_err(|error| SourceFailure::Malformed(error.to_string()))
+    }
+}
+
+pub enum SourceAdapter {
+    TikTokPublicProfile(TikTokPublicProfileSource),
+    RssHub(RssProfileSource),
+}
+
+impl SourceAdapter {
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::TikTokPublicProfile(_) => "tiktok_public_profile",
+            Self::RssHub(_) => "rsshub",
+        }
+    }
+
+    pub async fn fetch_profile(&self, username: &str) -> std::result::Result<PublicProfile, SourceFailure> {
+        match self {
+            Self::TikTokPublicProfile(source) => source.fetch_profile(username).await,
+            Self::RssHub(source) => source.fetch_profile(username).await,
+        }
     }
 }
 
