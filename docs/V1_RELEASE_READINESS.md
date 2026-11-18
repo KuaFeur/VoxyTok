@@ -6,7 +6,7 @@ A successful CI run is necessary but does not prove that TikTok's public pages o
 
 ## Automated release gates
 
-- [ ] Rust formatting, compilation, unit tests, PostgreSQL integration tests and strict Clippy pass on the exact release commit.
+- [ ] Rust sources format successfully with rustfmt; compilation, unit tests, PostgreSQL integration tests and strict Clippy pass on the exact release commit.
 - [ ] Docker image builds from the committed `Cargo.lock`.
 - [ ] Container smoke test starts embedded PostgreSQL, applies migrations, reaches `/readyz`, rejects unauthenticated API calls and accepts authenticated API calls.
 - [ ] Release tags use semantic versioning (`v1.0.0`, `v1.0.0-rc.1`).

@@ -49,8 +49,10 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - name: Format Rust sources
+        run: cargo fmt --all
+      - name: Check whitespace errors
+        run: git diff --check
       - name: Compile all targets
         run: cargo check --locked --all-targets
       - name: Run unit and PostgreSQL integration tests
