@@ -213,12 +213,14 @@ components:
   schemas:
     Health:
       type: object
-      required: [status, service, webhook_configured, tiktok_provider_configured]
+      required: [status, service, webhook_configured, tiktok_provider_configured, public_monitor_configured, public_source_count]
       properties:
         status: { type: string, enum: [ok, ready] }
         service: { type: string, const: voxytok }
         webhook_configured: { type: boolean }
         tiktok_provider_configured: { type: boolean }
+        public_monitor_configured: { type: boolean }
+        public_source_count: { type: integer, minimum: 0 }
     Creator:
       type: object
       required: [id, username, enabled, created_at]
