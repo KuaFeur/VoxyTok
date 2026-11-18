@@ -39,7 +39,11 @@ Response (HTTP 201):
   "username": "creator",
   "display_name": null,
   "enabled": true,
-  "created_at": "2026-11-18T00:00:00Z"
+  "created_at": "2026-11-18T00:00:00Z",
+  "last_successful_poll_at": null,
+  "next_poll_at": "2026-11-18T00:00:00Z",
+  "poll_failures": 0,
+  "last_error": null
 }
 ```
 

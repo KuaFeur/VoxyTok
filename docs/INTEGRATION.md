@@ -29,6 +29,17 @@ const creator = await response.json();
 
 The first successful source lookup creates a baseline without replaying the creator's existing catalogue. Later discoveries are sent to your webhook.
 
+## Inspect monitoring health
+
+Your bot can display source-level health to its administrators:
+
+```http
+GET /api/v1/creators/CREATOR_UUID/sources
+Authorization: Bearer YOUR_API_TOKEN
+```
+
+The response reports each configured adapter's state, last success/attempt, next retry, failure counters, latency and last error. An empty array means the monitor has not attempted that creator yet. This is useful for diagnosing rate limits and source outages without reading the VoxyTok container logs.
+
 ## Remove a profile
 
 ```http
