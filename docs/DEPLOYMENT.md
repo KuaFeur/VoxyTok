@@ -5,9 +5,9 @@ This runbook describes how to deploy VoxyTok on a Pelican/Wings node. It does no
 ## Release currently published
 
 - Container: `ghcr.io/kuafeur/voxytok:latest`
-- Published image digest: `sha256:28ab3efb59d851709f7901c43891a66c438854e122b73cf9deecfe0fdb612d5e`
-- Source commit: `3b610ff87e0ca63c1b26aa352677346f37e08454`
-- GitHub Actions run: [CI #120](https://github.com/KuaFeur/VoxyTok/actions/runs/44289701890)
+- Published image digest: `sha256:ae68d06314752b4a8dfc80dd98cd0a886dfc77963e8c4ecdc076a715cd59f98e`
+- Source commit: `e2ab3b59f378141e35078fa79384ea6123802c09`
+- GitHub Actions run: [CI #120](https://github.com/KuaFeur/VoxyTok/actions/runs/44390200642)
 
 The digest above identifies the image published by the successful main-branch CI run. The main-branch workflow publishes `:latest` only after its Rust checks, container build and embedded-PostgreSQL/HTTP smoke tests succeed. **There is also a separate tag workflow:** pushing a `v*` tag publishes both that version tag and `:latest` without depending on the main-branch CI workflow. Therefore, a tag-triggered `:latest` update is not evidence that those checks passed. For production, deploy a digest whose source commit and successful CI run you have independently verified; do not assume the moving `:latest` tag is always validated.
 
