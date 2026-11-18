@@ -42,12 +42,12 @@ impl TikTokPublicProfileSource {
     pub fn new(client: Client) -> Self { Self { client } }
 
     fn parse(&self, username: &str, html: &str) -> Result<PublicProfile> {
-        let marker = "id=\"__UNIVERSAL_DATA_FOR_REHYDRATION__\"";
-        let marker_pos = html.find(marker).ok_or_else(|| anyhow!("TikTok public profile hydration script is missing"))?;
+        let marker = "id=\"__FRONTITY_CONNECT_STATE__\"";
+        let marker_pos = html.find(marker).ok_or_else(|| anyhow!("TikTok embed state script is missing"))?;
         let script_start = html[marker_pos..].find('>').map(|n| marker_pos + n + 1)
-            .ok_or_else(|| anyhow!("TikTok public profile hydration script has no opening delimiter"))?;
+            .ok_or_else(|| anyhow!("TikTok embed state script has no opening delimiter"))?;
         let script_end = html[script_start..].find("</script>").map(|n| script_start + n)
-            .ok_or_else(|| anyhow!("TikTok public profile hydration script is not closed"))?;
+            .ok_or_else(|| anyhow!("TikTok embed state script is not closed"))?;
         let state: Value = serde_json::from_str(html[script_start..script_end].trim())
             .context("TikTok embed state is not valid JSON")?;
         let user_info = find_value(&state, "userInfo")
@@ -56,10 +56,10 @@ impl TikTokPublicProfileSource {
         let canonical_username = user.get("uniqueId").and_then(Value::as_str)
             .unwrap_or(username).trim_start_matches('@').to_owned();
         let display_name = user.get("nickname").and_then(Value::as_str).map(str::to_owned);
-        let avatar_url = user.get("avatarLarger").or_else(|| user.get("avatarMedium"))
-            .or_else(|| user.get("avatarThumb")).and_then(Value::as_str).map(str::to_owned);
-        let videos = find_value(&state, "itemList")
-            .or_else(|| find_value(&state, "videoList"))
+        let avatar_url = user.get("avatarThumbUrl").or_else(|| user.get("avatarLarger"))
+            .or_else(|| user.get("avatarMedium")).and_then(Value::as_str).map(str::to_owned);
+        let videos = find_value(&state, "videoList")
+            .or_else(|| find_value(&state, "itemList"))
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow!("TikTok public profile response has no video list"))?;
         let mut normalized = Vec::new();
@@ -68,14 +68,15 @@ impl TikTokPublicProfileSource {
             if id.is_empty() { continue; }
             let title = video.get("desc").and_then(Value::as_str).map(str::to_owned);
             let video_meta = video.get("video").unwrap_or(video);
-            let timestamp = video.get("createTime").and_then(Value::as_i64);
+            let timestamp = video.get("createTime").and_then(Value::as_i64)
+                .or_else(|| id.parse::<u64>().ok().map(|value| (value >> 32) as i64));
             let published_at = timestamp.and_then(|value| DateTime::from_timestamp(value, 0));
             normalized.push(PublicVideo {
                 id: id.to_owned(),
                 title: title.clone(),
                 description: title,
                 url: format!("https://www.tiktok.com/@{canonical_username}/video/{id}"),
-                cover_image_url: video_meta.get("cover").or_else(|| video_meta.get("originCover"))
+                cover_image_url: video_meta.get("coverUrl").or_else(|| video_meta.get("cover")).or_else(|| video_meta.get("originCover"))
                     .and_then(Value::as_str).map(str::to_owned),
                 published_at,
             });
@@ -87,7 +88,7 @@ impl TikTokPublicProfileSource {
 impl TikTokPublicProfileSource {
     pub async fn fetch_profile(&self, username: &str) -> std::result::Result<PublicProfile, SourceFailure> {
         let handle = username.trim_start_matches('@');
-        let url = format!("https://www.tiktok.com/@{handle}");
+        let url = format!("https://www.tiktok.com/embed/@{handle}");
         let response = self.client.get(url).send().await
             .map_err(|error| SourceFailure::TemporarilyUnavailable(error.to_string()))?;
         let status = response.status();
@@ -110,7 +111,7 @@ impl TikTokPublicProfileSource {
         if lower_html.contains("this account is private") || lower_html.contains("private account") {
             return Err(SourceFailure::PrivateOrUnavailable);
         }
-        if html.contains("_wafchallengeid") || (lower_html.contains("captcha") && !html.contains("__UNIVERSAL_DATA_FOR_REHYDRATION__")) {
+        if html.contains("_wafchallengeid") || (lower_html.contains("captcha") && !html.contains("__FRONTITY_CONNECT_STATE__")) {
             return Err(SourceFailure::Challenge);
         }
         self.parse(handle, &html).map_err(|error| SourceFailure::Malformed(error.to_string()))
@@ -163,10 +164,10 @@ pub enum SourceAdapter {
 }
 
 impl SourceAdapter {
-    pub fn key(&self) -> &'static str {
+    pub fn key(&self) -> String {
         match self {
-            Self::TikTokPublicProfile(_) => "tiktok_public_profile",
-            Self::RssHub(_) => "rsshub",
+            Self::TikTokPublicProfile(_) => "tiktok_public_profile".to_owned(),
+            Self::RssHub(source) => format!("rsshub:{}", source.base_url.host_str().unwrap_or("unknown")),
         }
     }
 
@@ -265,7 +266,7 @@ mod tests {
 
     #[test]
     fn parses_tiktok_embedded_profile_state() {
-        let html = r#"<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">{"source":{"data":{"/embed/@demo":{"userInfo":{"uniqueId":"demo","nickname":"Demo","avatarThumbUrl":"https://img"},"videoList":[{"id":"7350000000000000000","desc":"hello","coverUrl":"https://cover","createTime":1710000000}]}}}}</script>"#;
+        let html = r#"<script id="__FRONTITY_CONNECT_STATE__" type="application/json">{"source":{"data":{"/embed/@demo":{"userInfo":{"uniqueId":"demo","nickname":"Demo","avatarThumbUrl":"https://img"},"videoList":[{"id":"7350000000000000000","desc":"hello","coverUrl":"https://cover","createTime":1710000000}]}}}}</script>"#;
         let client = Client::builder().build().unwrap();
         let source = TikTokPublicProfileSource::new(client);
         let profile = source.parse("demo", html).unwrap();
