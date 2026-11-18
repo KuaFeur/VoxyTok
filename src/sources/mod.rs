@@ -251,8 +251,22 @@ fn parse_feed(username: &str, xml: &str) -> Result<PublicProfile> {
 }
 
 fn root_declares_atom_namespace(xml: &str) -> Result<bool> {
-    let start = xml.find('<').ok_or_else(|| anyhow!("XML document has no root element"))?;
-    let rest = &xml[start..];
+    let mut rest = xml;
+    loop {
+        let start = rest.find('<').ok_or_else(|| anyhow!("XML document has no root element"))?;
+        rest = &rest[start..];
+        if rest.starts_with("<?") {
+            let end = rest.find("?>").ok_or_else(|| anyhow!("unterminated XML processing instruction"))?;
+            rest = &rest[end + 2..];
+            continue;
+        }
+        if rest.starts_with("<!--") {
+            let end = rest.find("-->").ok_or_else(|| anyhow!("unterminated XML comment"))?;
+            rest = &rest[end + 3..];
+            continue;
+        }
+        break;
+    }
     let end = rest.find('>').ok_or_else(|| anyhow!("unterminated XML root element"))?;
     let header = &rest[1..end];
     let qualified = header.split_whitespace().next().unwrap_or_default();
