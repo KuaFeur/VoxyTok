@@ -60,6 +60,8 @@ Default polling interval is five minutes. The operator can set `PUBLIC_POLL_INTE
 
 Persist `VOXYTOK_DATA_DIR` across restarts and upgrades. It contains the embedded PostgreSQL cluster and must not be deleted.
 
+The `:latest` image is published automatically after the main-branch CI, container build and PostgreSQL/API smoke test succeed. For production upgrades, record and preferably pin the image digest. See the [Pelican deployment and rollback runbook](docs/DEPLOYMENT.md).
+
 ## Quick start
 
 1. Deploy the container and persist `VOXYTOK_DATA_DIR`.
@@ -84,11 +86,11 @@ All `/api/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 | `GET` | `/healthz` | Liveness |
 | `GET` | `/readyz` | PostgreSQL readiness |
 
-See [API reference](docs/API.md), [OpenAPI specification](docs/openapi.yaml) and [integration guide](docs/INTEGRATION.md).
+See [API reference](docs/API.md), [OpenAPI specification](docs/openapi.yaml), [integration guide](docs/INTEGRATION.md) and [deployment runbook](docs/DEPLOYMENT.md).
 
 ## Development status
 
-The public-profile multi-source implementation is under active development on the `feature/public-profile-monitoring` branch. Do not deploy that branch as a production replacement until CI, parser fixtures, RSS route compatibility and live profile tests pass.
+The public-profile monitoring implementation is merged into `main`. The main-branch CI currently validates Rust formatting, checks, tests and Clippy, builds the container, smoke-tests embedded PostgreSQL and the HTTP API, then publishes `ghcr.io/kuafeur/voxytok:latest` to GHCR.
 
 ## License
 
