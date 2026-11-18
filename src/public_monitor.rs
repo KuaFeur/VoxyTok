@@ -69,24 +69,24 @@ async fn record_host_failure(db: &PgPool, source_key: &str, error: &SourceFailur
     Ok(())
 }
 
-async fn record_source_success(db: &PgPool, creator_id: Uuid, source_key: &str, latency_ms: i64) -> anyhow::Result<()> {
+async fn record_source_success(db: &PgPool, creator_id: Uuid, source_key: &str, host_key: &str, latency_ms: i64) -> anyhow::Result<()> {
     sqlx::query(
         r#"INSERT INTO creator_source_states (creator_id,source_key,status,last_attempt_at,last_success_at,next_attempt_at,consecutive_failures,total_successes,last_latency_ms,last_http_status,last_error_code,last_error,updated_at)
         VALUES ($1,$2,'healthy',NOW(),NOW(),NULL,0,1,$3,200,NULL,NULL,NOW())
         ON CONFLICT (creator_id,source_key) DO UPDATE SET status='healthy',last_attempt_at=NOW(),last_success_at=NOW(),next_attempt_at=NULL,consecutive_failures=0,total_successes=creator_source_states.total_successes+1,last_latency_ms=EXCLUDED.last_latency_ms,last_http_status=200,last_error_code=NULL,last_error=NULL,updated_at=NOW()"#
     ).bind(creator_id).bind(source_key).bind(latency_ms).execute(db).await?;
-    record_host_success(db, source_key).await?;
+    record_host_success(db, host_key).await?;
     Ok(())
 }
 
-async fn record_source_failure(db: &PgPool, creator_id: Uuid, source_key: &str, error: &SourceFailure) -> anyhow::Result<()> {
+async fn record_source_failure(db: &PgPool, creator_id: Uuid, source_key: &str, host_key: &str, error: &SourceFailure) -> anyhow::Result<()> {
     let (code, message, delay) = failure_details(error);
     sqlx::query(
         r#"INSERT INTO creator_source_states (creator_id,source_key,status,last_attempt_at,next_attempt_at,consecutive_failures,total_failures,last_error_code,last_error,updated_at)
         VALUES ($1,$2,'cooldown',NOW(),NOW()+($3*INTERVAL '1 second'),1,1,$4,$5,NOW())
         ON CONFLICT (creator_id,source_key) DO UPDATE SET status='cooldown',last_attempt_at=NOW(),next_attempt_at=NOW()+(GREATEST($3,LEAST(60 * (1 << LEAST(creator_source_states.consecutive_failures,10)),21600))*INTERVAL '1 second'),consecutive_failures=creator_source_states.consecutive_failures+1,total_failures=creator_source_states.total_failures+1,last_error_code=$4,last_error=$5,updated_at=NOW()"#
     ).bind(creator_id).bind(source_key).bind(delay).bind(code).bind(message).execute(db).await?;
-    record_host_failure(db, source_key, error).await?;
+    record_host_failure(db, host_key, error).await?;
     Ok(())
 }
 
@@ -147,18 +147,19 @@ async fn poll_one(db: &PgPool, creator: DueCreator, sources: &[SourceAdapter], p
     let mut last_error = None;
     for source in sources {
         let source_key = source.key();
-        if source_is_cooling_down(db, creator.id, &source_key).await? || host_is_cooling_down(db, &source_key).await? { continue; }
+        let host_key = source.host_key();
+        if source_is_cooling_down(db, creator.id, &source_key).await? || host_is_cooling_down(db, &host_key).await? { continue; }
         let started = std::time::Instant::now();
         match source.fetch_profile(&creator.username).await {
             Ok(profile) => {
-                record_source_success(db, creator.id, &source_key, started.elapsed().as_millis() as i64).await?;
+                record_source_success(db, creator.id, &source_key, &host_key, started.elapsed().as_millis() as i64).await?;
                 let count = ingest_profile(db, &creator, profile, &source_key, poll_interval).await?;
                 tracing::info!(creator=%creator.username, source=%source_key, new_videos=count, first_sync=creator.last_polled_at.is_none(), "public TikTok profile synchronized");
                 return Ok(());
             }
             Err(error) => {
                 tracing::warn!(creator=%creator.username, source=%source_key, ?error, "public profile source failed; trying next adapter");
-                record_source_failure(db, creator.id, &source_key, &error).await?;
+                record_source_failure(db, creator.id, &source_key, &host_key, &error).await?;
                 last_error = Some(format!("{}: {:?}", source_key, error));
             }
         }
