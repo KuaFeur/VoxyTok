@@ -130,9 +130,9 @@
     },
     {
       "name": "RSSHub fallback sources",
-      "description": "Comma-separated HTTPS RSSHub-compatible base URLs. Defaults to the public RSSHub instance; the direct TikTok public-profile adapter is always enabled.",
+      "description": "Comma-separated HTTPS RSSHub-compatible base URLs used as fallback instances. Defaults to three public instances; direct TikTok embed retrieval is always enabled.",
       "env_variable": "RSSHUB_BASE_URLS",
-      "default_value": "https://rsshub.app",
+      "default_value": "https://rsshub.app,https://rsshub.rssforever.com,https://rsshub.joshrandall.net",
       "user_viewable": false,
       "user_editable": false,
       "rules": "required|string|max:2048",
