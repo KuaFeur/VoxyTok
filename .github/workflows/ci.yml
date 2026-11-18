@@ -151,3 +151,16 @@ jobs:
             echo "- Source commit: `$${GITHUB_SHA}`"
             echo "- CI run: $${GITHUB_SERVER_URL}/$${GITHUB_REPOSITORY}/actions/runs/$${GITHUB_RUN_ID}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record immutable image reference
+        env:
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          test -n "$IMAGE_DIGEST"
+          {
+            echo "### Published container image"
+            echo "- Immutable image: `ghcr.io/kuafeur/voxytok@$IMAGE_DIGEST`"
+            echo "- Mutable tag: `ghcr.io/kuafeur/voxytok:latest`"
+            echo "- Source commit: `$GITHUB_SHA`"
+            echo "- CI run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } >> "$GITHUB_STEP_SUMMARY"
