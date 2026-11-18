@@ -194,6 +194,16 @@ mod tests {
     }
 
     #[test]
+    fn rate_limit_retry_after_is_respected() {
+        let error = SourceFailure::RateLimited {
+            retry_after: Some(Duration::from_secs(240)),
+        };
+        let (code, _, delay) = failure_details(&error);
+        assert_eq!(code, "rate_limited");
+        assert_eq!(delay, 240);
+    }
+
+    #[test]
     fn retry_backoff_is_bounded() {
         assert_eq!(retry_seconds(0), 60);
         assert_eq!(retry_seconds(2), 240);
