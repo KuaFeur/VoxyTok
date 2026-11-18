@@ -1,9 +1,9 @@
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde_json::json;
 use sqlx::{FromRow, PgPool};
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use uuid::Uuid;
-use crate::sources::{ProfileSource, PublicProfile, SourceFailure};
+use crate::sources::{PublicProfile, SourceAdapter, SourceFailure};
 
 #[derive(Clone, FromRow)]
 struct DueCreator {
@@ -58,10 +58,10 @@ async fn record_source_failure(db: &PgPool, creator_id: Uuid, source_key: &str, 
     Ok(())
 }
 
-fn should_emit(first_sync: bool, last_polled_at: Option<DateTime<Utc>>, published_at: Option<DateTime<Utc>>) -> bool {
+fn should_emit(first_sync: bool, last_polled_at: Option<DateTime<Utc>>, published_at: Option<&DateTime<Utc>>) -> bool {
     if first_sync { return false; }
     let Some(last_polled_at) = last_polled_at else { return false; };
-    published_at.is_some_and(|published| published >= last_polled_at - ChronoDuration::minutes(2))
+    published_at.is_some_and(|published| *published >= last_polled_at - ChronoDuration::minutes(2))
 }
 
 async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfile, source_key: &str, poll_interval: Duration) -> anyhow::Result<usize> {
@@ -84,15 +84,15 @@ async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfil
                 "cover_image_url": video.cover_image_url.as_deref(),
                 "url": video.url.as_str(),
                 "embed_url": null,
-                "published_at": video.published_at
+                "published_at": video.published_at.as_ref()
             }
         });
         let mut tx = db.begin().await?;
         let video_id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO videos (id,creator_id,platform_video_id,payload,published_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (creator_id,platform_video_id) DO NOTHING RETURNING id"
-        ).bind(Uuid::new_v4()).bind(creator.id).bind(&video.id).bind(&payload).bind(video.published_at)
+        ).bind(Uuid::new_v4()).bind(creator.id).bind(&video.id).bind(&payload).bind(video.published_at.clone())
             .fetch_optional(&mut *tx).await?;
-        if let Some(video_id) = video_id && should_emit(first_sync, creator.last_polled_at, video.published_at) {
+        if let Some(video_id) = video_id && should_emit(first_sync, creator.last_polled_at, video.published_at.as_ref()) {
                 sqlx::query("INSERT INTO deliveries (id,video_id) VALUES ($1,$2)")
                     .bind(Uuid::new_v4()).bind(video_id).execute(&mut *tx).await?;
             inserted += 1;
@@ -104,7 +104,7 @@ async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfil
     Ok(inserted)
 }
 
-async fn poll_one(db: &PgPool, creator: DueCreator, sources: &[Arc<dyn ProfileSource>], poll_interval: Duration) -> anyhow::Result<()> {
+async fn poll_one(db: &PgPool, creator: DueCreator, sources: &[SourceAdapter], poll_interval: Duration) -> anyhow::Result<()> {
     let lease = sqlx::query_scalar::<_, Uuid>(
         "UPDATE creators SET poll_lease_until=NOW()+INTERVAL '2 minutes' WHERE id=$1 AND (poll_lease_until IS NULL OR poll_lease_until<NOW()) RETURNING id"
     ).bind(creator.id).fetch_optional(db).await?;
@@ -133,7 +133,7 @@ async fn poll_one(db: &PgPool, creator: DueCreator, sources: &[Arc<dyn ProfileSo
     Ok(())
 }
 
-pub async fn run(db: PgPool, sources: Vec<Arc<dyn ProfileSource>>, poll_interval: Duration) {
+pub async fn run(db: PgPool, sources: Vec<SourceAdapter>, poll_interval: Duration) {
     if sources.is_empty() {
         tracing::error!("public profile monitor has no acquisition sources; creator monitoring is disabled");
         return;
@@ -163,10 +163,10 @@ mod tests {
     #[test]
     fn first_sync_and_old_feed_items_never_emit() {
         let now = Utc::now();
-        assert!(!should_emit(true, None, Some(now)));
-        assert!(!should_emit(false, Some(now), Some(now - ChronoDuration::minutes(10))));
+        assert!(!should_emit(true, None, Some(&now)));
+        assert!(!should_emit(false, Some(now), Some(&(now - ChronoDuration::minutes(10)))));
         assert!(!should_emit(false, Some(now), None));
-        assert!(should_emit(false, Some(now), Some(now - ChronoDuration::seconds(30))));
+        assert!(should_emit(false, Some(now), Some(&(now - ChronoDuration::seconds(30)))));
     }
 
     #[test]
