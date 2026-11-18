@@ -11,6 +11,7 @@ struct DueCreator {
     username: String,
     display_name: Option<String>,
     last_polled_at: Option<DateTime<Utc>>,
+    poll_failures: i32,
 }
 
 fn retry_seconds(failures: i32) -> i64 {
@@ -52,9 +53,15 @@ async fn record_source_failure(db: &PgPool, creator_id: Uuid, source_key: &str, 
     sqlx::query(
         r#"INSERT INTO creator_source_states (creator_id,source_key,status,last_attempt_at,next_attempt_at,consecutive_failures,total_failures,last_error_code,last_error,updated_at)
         VALUES ($1,$2,'cooldown',NOW(),NOW()+($3*INTERVAL '1 second'),1,1,$4,$5,NOW())
-        ON CONFLICT (creator_id,source_key) DO UPDATE SET status='cooldown',last_attempt_at=NOW(),next_attempt_at=NOW()+($3*INTERVAL '1 second'),consecutive_failures=creator_source_states.consecutive_failures+1,total_failures=creator_source_states.total_failures+1,last_error_code=$4,last_error=$5,updated_at=NOW()"#
+        ON CONFLICT (creator_id,source_key) DO UPDATE SET status='cooldown',last_attempt_at=NOW(),next_attempt_at=NOW()+(LEAST($3 * (1 << LEAST(creator_source_states.consecutive_failures,6)),21600)*INTERVAL '1 second'),consecutive_failures=creator_source_states.consecutive_failures+1,total_failures=creator_source_states.total_failures+1,last_error_code=$4,last_error=$5,updated_at=NOW()"#
     ).bind(creator_id).bind(source_key).bind(delay).bind(code).bind(message).execute(db).await?;
     Ok(())
+}
+
+fn should_emit(first_sync: bool, last_polled_at: Option<DateTime<Utc>>, published_at: Option<DateTime<Utc>>) -> bool {
+    if first_sync { return false; }
+    let Some(last_polled_at) = last_polled_at else { return false; };
+    published_at.is_some_and(|published| published >= last_polled_at - ChronoDuration::minutes(2))
 }
 
 async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfile, source_key: &str, poll_interval: Duration) -> anyhow::Result<usize> {
@@ -85,12 +92,10 @@ async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfil
             "INSERT INTO videos (id,creator_id,platform_video_id,payload,published_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (creator_id,platform_video_id) DO NOTHING RETURNING id"
         ).bind(Uuid::new_v4()).bind(creator.id).bind(&video.id).bind(&payload).bind(video.published_at)
             .fetch_optional(&mut *tx).await?;
-        if let Some(video_id) = video_id {
-            if !first_sync {
+        if let Some(video_id) = video_id && should_emit(first_sync, creator.last_polled_at, video.published_at) {
                 sqlx::query("INSERT INTO deliveries (id,video_id) VALUES ($1,$2)")
                     .bind(Uuid::new_v4()).bind(video_id).execute(&mut *tx).await?;
-                inserted += 1;
-            }
+            inserted += 1;
         }
         tx.commit().await?;
     }
@@ -124,7 +129,7 @@ async fn poll_one(db: &PgPool, creator: DueCreator, sources: &[Arc<dyn ProfileSo
     }
     let message = last_error.unwrap_or_else(|| "all configured sources are in cooldown".to_owned());
     sqlx::query("UPDATE creators SET poll_lease_until=NULL,poll_failures=poll_failures+1,next_poll_at=NOW()+($2*INTERVAL '1 second'),last_error=$3 WHERE id=$1")
-        .bind(creator.id).bind(retry_seconds(creator.last_polled_at.map(|_| 1).unwrap_or(0))).bind(message.chars().take(1000).collect::<String>()).execute(db).await?;
+        .bind(creator.id).bind(retry_seconds(creator.poll_failures)).bind(message.chars().take(1000).collect::<String>()).execute(db).await?;
     Ok(())
 }
 
@@ -135,7 +140,7 @@ pub async fn run(db: PgPool, sources: Vec<Arc<dyn ProfileSource>>, poll_interval
     }
     loop {
         let due = sqlx::query_as::<_, DueCreator>(
-            "SELECT id,username,display_name,last_polled_at FROM creators WHERE enabled=TRUE AND tiktok_open_id IS NULL AND next_poll_at<=NOW() AND (poll_lease_until IS NULL OR poll_lease_until<NOW()) ORDER BY next_poll_at,created_at LIMIT 10"
+            "SELECT id,username,display_name,last_polled_at,poll_failures FROM creators WHERE enabled=TRUE AND tiktok_open_id IS NULL AND next_poll_at<=NOW() AND (poll_lease_until IS NULL OR poll_lease_until<NOW()) ORDER BY next_poll_at,created_at LIMIT 10"
         ).fetch_all(&db).await;
         match due {
             Ok(creators) => {
@@ -154,6 +159,15 @@ pub async fn run(db: PgPool, sources: Vec<Arc<dyn ProfileSource>>, poll_interval
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_sync_and_old_feed_items_never_emit() {
+        let now = Utc::now();
+        assert!(!should_emit(true, None, Some(now)));
+        assert!(!should_emit(false, Some(now), Some(now - ChronoDuration::minutes(10))));
+        assert!(!should_emit(false, Some(now), None));
+        assert!(should_emit(false, Some(now), Some(now - ChronoDuration::seconds(30))));
+    }
 
     #[test]
     fn retry_backoff_is_bounded() {
