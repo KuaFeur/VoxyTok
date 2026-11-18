@@ -60,7 +60,7 @@ Default polling interval is five minutes. The operator can set `PUBLIC_POLL_INTE
 
 Persist `VOXYTOK_DATA_DIR` across restarts and upgrades. It contains application data and, by default, the embedded PostgreSQL cluster. If `POSTGRES_DATA_DIR` is set, persist that actual PostgreSQL path separately as well.
 
-The main-branch workflow publishes `:latest` only after Rust checks, the container build and PostgreSQL/API smoke tests pass. The separate tag workflow also publishes `:latest` when a `v*` tag is pushed, but it does not depend on those CI checks. A tag-triggered image must therefore not be assumed validated. For production, verify the source commit and successful CI run, then pin the corresponding immutable image digest. See the [Pelican deployment and rollback runbook](docs/DEPLOYMENT.md).
+The main-branch workflow publishes `:latest` only after Rust checks, the container build and PostgreSQL/API smoke tests pass. A version tag is published only when the exact commit already has a successful main-branch CI run. Prerelease tags such as `v1.0.0-rc.1` never replace stable `:latest`. For production, verify the source commit and successful CI run, then pin the corresponding immutable image digest. See the [Pelican deployment and rollback runbook](docs/DEPLOYMENT.md).
 
 ## Quick start
 
@@ -79,6 +79,7 @@ All `/api/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 | --- | --- | --- |
 | `POST` | `/api/v1/creators` | Add a public TikTok username |
 | `GET` | `/api/v1/creators` | List monitored creators |
+| `GET` | `/api/v1/creators/{id}/sources` | Inspect source health, cooldowns and retry state |
 | `DELETE` | `/api/v1/creators/{id}` | Stop monitoring and delete creator data |
 | `GET` | `/api/v1/events` | Inspect events and delivery states |
 | `POST` | `/api/v1/events` | Internal normalized event ingestion |
