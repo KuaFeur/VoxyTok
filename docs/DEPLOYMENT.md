@@ -8,13 +8,14 @@ This runbook describes how to deploy VoxyTok on a Pelican/Wings node. It does no
 - Last independently recorded digest: `sha256:ae68d06314752b4a8dfc80dd98cd0a886dfc77963e8c4ecdc076a715cd59f98e`
 - Source commit for that digest: `e2ab3b59f378141e35078fa79384ea6123802c09`
 - CI run for that digest: [CI #120](https://github.com/KuaFeur/VoxyTok/actions/runs/44390200642)
-- Latest successful main publication: commit `7e245722a4d173e2bb5a2114c2a0eff34673e275`, [CI #140](https://github.com/KuaFeur/VoxyTok/actions/runs/44394760195)
 
 The digest listed above is the last digest independently recorded in this runbook; it is **not** asserted to be the digest of the latest publication. The CI workflow records the immutable digest, source commit and run URL in each successful publication's GitHub Actions job summary. For a new deployment, open the **Publish latest container** job summary for the exact successful main-branch run and use its `ghcr.io/kuafeur/voxytok@sha256:...` reference. Before deploying, confirm that the summary's source commit matches the intended release commit. Do not deploy using a digest copied from an older run unless you intend to deploy that older image.
 
 The main-branch workflow publishes `:latest` only after Rust checks, the container build and the embedded-PostgreSQL/HTTP smoke test succeed. The release-tag workflow also requires a successful main-branch CI run for the exact commit being tagged. Stable version tags may update `:latest`; prerelease tags such as `v1.0.0-rc.1` publish the prerelease image without replacing `:latest`.
 
 **The package's anonymous-pull visibility has not been verified.** GitHub documents that a newly published container package defaults to private; before using it from Pelican without registry credentials, open the repository's Packages section, open `voxytok`, then Package settings and set visibility to Public. Alternatively, configure authenticated GHCR pulls on the Wings host. See [GitHub's container-registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry). The digest is immutable; `:latest` is a moving tag.
+
+For a first non-production deployment, follow the [V1 end-to-end test plan](TESTING_V1.md) before promoting the image to production.
 
 ## Pelican configuration
 
