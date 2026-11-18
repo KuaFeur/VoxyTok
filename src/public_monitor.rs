@@ -217,7 +217,9 @@ mod tests {
     fn first_sync_and_old_feed_items_never_emit() {
         let now = Utc::now();
         assert!(!should_emit(true, None, Some(&now)));
-        assert!(!should_emit(false, Some(&(now - ChronoDuration::minutes(20))), Some(&(now - ChronoDuration::minutes(10)))));
+        assert!(!should_emit(false, Some(&(now - ChronoDuration::minutes(10))), Some(&(now - ChronoDuration::minutes(20)))));
+        // A feed item discovered late remains eligible when it was published after monitoring began.
+        assert!(should_emit(false, Some(&(now - ChronoDuration::minutes(20))), Some(&(now - ChronoDuration::minutes(18)))));
         assert!(!should_emit(false, Some(&now), None));
         assert!(should_emit(false, Some(&(now - ChronoDuration::seconds(30))), Some(&now)));
     }
