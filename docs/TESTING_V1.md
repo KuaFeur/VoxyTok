@@ -5,6 +5,7 @@ This checklist is intended for the first real-world validation of a fresh, non-p
 ## 1. Prepare a disposable Pelican instance
 
 - Import `deploy/pelican/egg-voxytok.json`.
+- Verify that `ghcr.io/kuafeur/voxytok:latest` can be pulled from the Wings host. GHCR packages are private by default when first published: if the pull returns `unauthorized`, either make the `voxytok` package public in GitHub → Packages → Package settings → Change visibility, or configure authenticated GHCR pulls on Wings.
 - Create a new Pelican server; do not reinstall or modify an existing production instance.
 - Allocate one TCP port and set `PORT` to the same port inside the container.
 - Set a unique `API_TOKEN` (32+ random characters).
