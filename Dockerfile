@@ -12,6 +12,8 @@ ENV PORT=8080 RUST_LOG=voxytok=info VOXYTOK_DATA_DIR=/home/container/data \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends postgresql postgresql-client gosu ca-certificates bash curl \
  && rm -rf /var/lib/apt/lists/* \
+ && (getent group postgres >/dev/null || groupadd --system postgres) \
+ && (getent passwd postgres >/dev/null || useradd --system --gid postgres --home-dir /var/lib/postgresql --no-create-home --shell /usr/sbin/nologin postgres) \
  && (getent group voxytok >/dev/null || groupadd --system voxytok) \
  && (getent passwd voxytok >/dev/null || useradd --system --gid voxytok --home-dir /home/container --no-create-home voxytok) \
  && mkdir -p /home/container/data /var/lib/postgresql /var/run/postgresql /var/log/postgresql \
