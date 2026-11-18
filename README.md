@@ -12,7 +12,7 @@ VoxyTok is a self-hosted Rust service that monitors public TikTok profiles and f
 - PostgreSQL is the durable source of truth; Redis is not required.
 - One configured webhook destination per instance.
 - RSS/Atom is an internal acquisition mechanism only; consuming bots never need to read RSS.
-- Multiple independent acquisition adapters normalize into one event pipeline.
+- Multiple retrieval paths normalize into one event pipeline.
 - PostgreSQL deduplication prevents duplicate notifications when adapters find the same video.
 
 ## How it works
@@ -37,7 +37,7 @@ flowchart TD
 
 ## Acquisition and rate limits
 
-The initial adapters are a direct TikTok public-profile hydration parser and an RSSHub-compatible RSS/Atom fallback. Each source has independent health state, cooldown, retry schedule and error classification. The scheduler respects `Retry-After`, applies backoff and avoids hammering sources that are failing.
+The initial retrieval paths are a direct TikTok embed parser and several RSSHub-compatible RSS/Atom instances. RSSHub's TikTok route also reads TikTok's public embed page, so these are separate intermediaries/caches rather than independent underlying TikTok data providers. Each source has independent health state, cooldown, retry schedule and error classification. The scheduler respects `Retry-After`, applies backoff and avoids hammering sources that are failing.
 
 No public TikTok source is unlimited or guaranteed. TikTok can change page structures, rate-limit automated requests, challenge traffic or make a profile unavailable. VoxyTok reports degraded acquisition and retries later; it does not rotate identities, evade CAPTCHAs or bypass access controls.
 
@@ -47,7 +47,7 @@ Default polling interval is five minutes. The operator can set `PUBLIC_POLL_INTE
 
 - Username-only public creator onboarding.
 - Multiple acquisition adapters behind one normalized interface.
-- Direct public profile parser and RSSHub-compatible RSS/Atom fallback.
+- Direct TikTok embed parser and several RSSHub-compatible RSS/Atom fallback instances.
 - Per-source health counters, latency, cooldown and failure backoff.
 - Initial synchronization baseline with no historical replay.
 - PostgreSQL video deduplication and durable webhook outbox.
