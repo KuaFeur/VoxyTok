@@ -265,6 +265,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rsshub_instances_have_independent_source_keys_and_correct_route() {
+        let client = Client::builder().build().unwrap();
+        let first = RssProfileSource::new(client.clone(), Url::parse("https://rsshub.app").unwrap());
+        let second = RssProfileSource::new(client, Url::parse("https://rsshub.rssforever.com").unwrap());
+        assert_ne!(
+            SourceAdapter::RssHub(first.clone()).key(),
+            SourceAdapter::RssHub(second).key()
+        );
+        assert_eq!(first.feed_url("@demo").unwrap().path(), "/tiktok/user/@demo");
+    }
+
+    #[test]
     fn parses_tiktok_embedded_profile_state() {
         let html = r#"<script id="__FRONTITY_CONNECT_STATE__" type="application/json">{"source":{"data":{"/embed/@demo":{"userInfo":{"uniqueId":"demo","nickname":"Demo","avatarThumbUrl":"https://img"},"videoList":[{"id":"7350000000000000000","desc":"hello","coverUrl":"https://cover","createTime":1710000000}]}}}}</script>"#;
         let client = Client::builder().build().unwrap();
