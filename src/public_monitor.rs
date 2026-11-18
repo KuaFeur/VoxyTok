@@ -112,19 +112,20 @@ async fn poll_one(db: &PgPool, creator: DueCreator, sources: &[SourceAdapter], p
     if lease.is_none() { return Ok(()); }
     let mut last_error = None;
     for source in sources {
-        if source_is_cooling_down(db, creator.id, source.key()).await? { continue; }
+        let source_key = source.key();
+        if source_is_cooling_down(db, creator.id, &source_key).await? { continue; }
         let started = std::time::Instant::now();
         match source.fetch_profile(&creator.username).await {
             Ok(profile) => {
-                record_source_success(db, creator.id, source.key(), started.elapsed().as_millis() as i64).await?;
-                let count = ingest_profile(db, &creator, profile, source.key(), poll_interval).await?;
-                tracing::info!(creator=%creator.username, source=source.key(), new_videos=count, first_sync=creator.last_polled_at.is_none(), "public TikTok profile synchronized");
+                record_source_success(db, creator.id, &source_key, started.elapsed().as_millis() as i64).await?;
+                let count = ingest_profile(db, &creator, profile, &source_key, poll_interval).await?;
+                tracing::info!(creator=%creator.username, source=%source_key, new_videos=count, first_sync=creator.last_polled_at.is_none(), "public TikTok profile synchronized");
                 return Ok(());
             }
             Err(error) => {
-                tracing::warn!(creator=%creator.username, source=source.key(), ?error, "public profile source failed; trying next adapter");
-                record_source_failure(db, creator.id, source.key(), &error).await?;
-                last_error = Some(format!("{}: {:?}", source.key(), error));
+                tracing::warn!(creator=%creator.username, source=%source_key, ?error, "public profile source failed; trying next adapter");
+                record_source_failure(db, creator.id, &source_key, &error).await?;
+                last_error = Some(format!("{}: {:?}", source_key, error));
             }
         }
     }
@@ -183,9 +184,9 @@ mod tests {
     fn first_sync_and_old_feed_items_never_emit() {
         let now = Utc::now();
         assert!(!should_emit(true, None, Some(&now)));
-        assert!(!should_emit(false, Some(now), Some(&(now - ChronoDuration::minutes(10)))));
-        assert!(!should_emit(false, Some(now), None));
-        assert!(should_emit(false, Some(now), Some(&(now - ChronoDuration::seconds(30)))));
+        assert!(!should_emit(false, Some(&now), Some(&(now - ChronoDuration::minutes(10)))));
+        assert!(!should_emit(false, Some(&now), None));
+        assert!(should_emit(false, Some(&now), Some(&(now - ChronoDuration::seconds(30)))));
     }
 
     #[test]
