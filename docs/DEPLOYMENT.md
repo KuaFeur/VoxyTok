@@ -2,24 +2,19 @@
 
 This runbook describes how to deploy VoxyTok on a Pelican/Wings node. It does not assume access to the production panel or host and does not perform a deployment.
 
-## Release currently published
+## Verified image references
 
 - Container: `ghcr.io/kuafeur/voxytok:latest`
-- Published image digest: `sha256:ae68d06314752b4a8dfc80dd98cd0a886dfc77963e8c4ecdc076a715cd59f98e`
-- Source commit: `e2ab3b59f378141e35078fa79384ea6123802c09`
-- GitHub Actions run: [CI #120](https://github.com/KuaFeur/VoxyTok/actions/runs/44390200642)
+- Last independently recorded digest: `sha256:ae68d06314752b4a8dfc80dd98cd0a886dfc77963e8c4ecdc076a715cd59f98e`
+- Source commit for that digest: `e2ab3b59f378141e35078fa79384ea6123802c09`
+- CI run for that digest: [CI #120](https://github.com/KuaFeur/VoxyTok/actions/runs/44390200642)
+- Latest successful main publication: commit `7e245722a4d173e2bb5a2114c2a0eff34673e275`, [CI #140](https://github.com/KuaFeur/VoxyTok/actions/runs/44394760195)
 
-The digest above identifies the last image published by the successful main-branch CI run. The main-branch workflow publishes `:latest` only after its Rust checks, container build and embedded-PostgreSQL/HTTP smoke tests succeed. The release-tag workflow also requires a successful main-branch CI run for the exact commit being tagged. Stable version tags may update `:latest`; prerelease tags such as `v1.0.0-rc.1` publish the prerelease image without replacing `:latest`. For production, deploy a digest whose source commit and successful CI run you have independently verified; do not assume the moving `:latest` tag is always validated.
+The digest listed above is the last digest independently recorded in this runbook; it is **not** asserted to be the digest of the latest publication. The CI workflow is being hardened to print the immutable digest, source commit and run URL in each successful publication's GitHub Actions job summary. For a new deployment, open the **Publish latest container** job summary for the exact successful main-branch run and use its `ghcr.io/kuafeur/voxytok@sha256:...` reference. Do not deploy using a digest copied from an older run unless you intend to deploy that older image.
+
+The main-branch workflow publishes `:latest` only after Rust checks, the container build and the embedded-PostgreSQL/HTTP smoke test succeed. The release-tag workflow also requires a successful main-branch CI run for the exact commit being tagged. Stable version tags may update `:latest`; prerelease tags such as `v1.0.0-rc.1` publish the prerelease image without replacing `:latest`.
 
 **The package's anonymous-pull visibility has not been verified.** GitHub documents that a newly published container package defaults to private; before using it from Pelican without registry credentials, open the repository's Packages section, open `voxytok`, then Package settings and set visibility to Public. Alternatively, configure authenticated GHCR pulls on the Wings host. See [GitHub's container-registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry). The digest is immutable; `:latest` is a moving tag.
-
-For a reproducible deployment, use the digest reference if the Pelican Docker image field accepts it:
-
-```text
-ghcr.io/kuafeur/voxytok@sha256:ae68d06314752b4a8dfc80dd98cd0a886dfc77963e8c4ecdc076a715cd59f98e
-```
-
-Otherwise use a version tag only after verifying its source commit and CI status, or use `:latest` only after independently verifying the image digest against a successful main-branch CI run.
 
 ## Pelican configuration
 
