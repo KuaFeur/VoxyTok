@@ -41,7 +41,7 @@ impl TikTokPublicProfileSource {
     pub fn new(client: Client) -> Self { Self { client } }
 
     fn parse(&self, username: &str, html: &str) -> Result<PublicProfile> {
-        let marker = "id=\\"__FRONTITY_CONNECT_STATE__\\"";
+        let marker = r#"id="__FRONTITY_CONNECT_STATE__""#;
         let marker_pos = html.find(marker).ok_or_else(|| anyhow!("TikTok embed state script is missing"))?;
         let script_start = html[marker_pos..].find('>').map(|n| marker_pos + n + 1)
             .ok_or_else(|| anyhow!("TikTok embed state script has no opening delimiter"))?;
