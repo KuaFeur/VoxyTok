@@ -72,9 +72,12 @@ An empty list means no source has attempted this creator yet. After the next pol
 
 ## 3. Verify webhook signature and durable delivery without waiting for TikTok
 
-This authenticated test event exercises the outbox, HTTP delivery, HMAC signature and receiver. It does not prove that TikTok retrieval works.
+This authenticated test event exercises the outbox, HTTP delivery, HMAC signature and receiver. It does not prove that TikTok retrieval works. Generate the test identifiers once and reuse them unchanged when repeating the request to verify deduplication.
 
 ```bash
+export TEST_VIDEO_ID="$TEST_VIDEO_ID"
+export TEST_PUBLISHED_AT="$TEST_PUBLISHED_AT"
+
 curl --fail --show-error -X POST \
   -H "Authorization: Bearer $VOXYTOK_API_TOKEN" \
   -H 'Content-Type: application/json' \
