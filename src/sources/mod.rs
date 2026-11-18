@@ -55,6 +55,10 @@ impl TikTokPublicProfileSource {
         let user = user_info.get("user").filter(|value| value.is_object()).unwrap_or(user_info);
         let canonical_username = user.get("uniqueId").and_then(Value::as_str)
             .unwrap_or(username).trim_start_matches('@').to_owned();
+        if user.get("privateAccount").and_then(Value::as_bool).unwrap_or(false)
+            || user.get("isPrivate").and_then(Value::as_bool).unwrap_or(false) {
+            bail!("TikTok profile is private");
+        }
         let display_name = user.get("nickname").and_then(Value::as_str).map(str::to_owned);
         let avatar_url = user.get("avatarThumbUrl").or_else(|| user.get("avatarLarger"))
             .or_else(|| user.get("avatarMedium")).and_then(Value::as_str).map(str::to_owned);
@@ -108,9 +112,6 @@ impl TikTokPublicProfileSource {
         let html = response.text().await
             .map_err(|error| SourceFailure::TemporarilyUnavailable(error.to_string()))?;
         let lower_html = html.to_ascii_lowercase();
-        if lower_html.contains("this account is private") || lower_html.contains("private account") {
-            return Err(SourceFailure::PrivateOrUnavailable);
-        }
         if html.contains("_wafchallengeid") || (lower_html.contains("captcha") && !html.contains("__FRONTITY_CONNECT_STATE__")) {
             return Err(SourceFailure::Challenge);
         }
@@ -194,8 +195,12 @@ fn find_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
 }
 
 fn parse_feed(username: &str, xml: &str) -> Result<PublicProfile> {
-    let entries = if xml.contains("<entry") { split_elements(xml, "entry") } else { split_elements(xml, "item") };
-    if entries.is_empty() { bail!("RSS/Atom document contains no entries"); }
+    let is_rss = xml.contains("<rss") && xml.contains("</rss>");
+    let is_atom = xml.contains("<feed") && xml.contains("</feed>");
+    if !is_rss && !is_atom {
+        bail!("response is not a valid RSS or Atom document");
+    }
+    let entries = if is_atom { split_elements(xml, "entry") } else { split_elements(xml, "item") };
     let mut videos = Vec::new();
     for entry in entries {
         let id = tag_value(entry, "guid").or_else(|| tag_value(entry, "id"))
@@ -286,6 +291,15 @@ mod tests {
         assert_eq!(profile.videos.len(), 1);
         assert_eq!(profile.videos[0].id, "7350000000000000000");
         assert_eq!(profile.videos[0].title.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn accepts_valid_empty_rss_and_atom_feeds() {
+        let rss = parse_feed("demo", "<rss><channel></channel></rss>").unwrap();
+        assert!(rss.videos.is_empty());
+        let atom = parse_feed("demo", "<feed xmlns=\\"http://www.w3.org/2005/Atom\\"></feed>").unwrap();
+        assert!(atom.videos.is_empty());
+        assert!(parse_feed("demo", "<html>no feed</html>").is_err());
     }
 
     #[test]
