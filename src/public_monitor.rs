@@ -25,10 +25,9 @@ fn failure_details(error: &SourceFailure) -> (String, String, i64) {
     match error {
         SourceFailure::RateLimited { retry_after } => (
             "rate_limited".to_owned(), "source returned HTTP 429".to_owned(),
-            retry_after.map(|v| v.as_secs().min(2_592_000).max(60) as i64).unwrap_or(900),
+            retry_after.map(|v| v.as_secs().clamp(60, 2_592_000) as i64).unwrap_or(900),
         ),
         SourceFailure::NotFound => ("not_found".to_owned(), "public profile was not found".to_owned(), 3600),
-        SourceFailure::PrivateOrUnavailable => ("unavailable".to_owned(), "profile is private or unavailable".to_owned(), 1800),
         SourceFailure::Challenge => ("challenge".to_owned(), "source returned an access challenge".to_owned(), 3600),
         SourceFailure::Malformed(message) => ("malformed".to_owned(), message.chars().take(500).collect(), 900),
         SourceFailure::TemporarilyUnavailable(message) => ("unavailable".to_owned(), message.chars().take(500).collect(), 300),
@@ -56,7 +55,7 @@ async fn record_host_success(db: &PgPool, source_key: &str) -> anyhow::Result<()
 }
 
 async fn record_host_failure(db: &PgPool, source_key: &str, error: &SourceFailure) -> anyhow::Result<()> {
-    if matches!(error, SourceFailure::NotFound | SourceFailure::PrivateOrUnavailable) {
+    if matches!(error, SourceFailure::NotFound) {
         return Ok(());
     }
     let (_, _, retry_after) = failure_details(error);
