@@ -297,7 +297,7 @@ mod tests {
     fn accepts_valid_empty_rss_and_atom_feeds() {
         let rss = parse_feed("demo", "<rss><channel></channel></rss>").unwrap();
         assert!(rss.videos.is_empty());
-        let atom = parse_feed("demo", "<feed xmlns=\\"http://www.w3.org/2005/Atom\\"></feed>").unwrap();
+        let atom = parse_feed("demo", r#"<feed xmlns="http://www.w3.org/2005/Atom"></feed>"#).unwrap();
         assert!(atom.videos.is_empty());
         assert!(parse_feed("demo", "<html>no feed</html>").is_err());
     }
