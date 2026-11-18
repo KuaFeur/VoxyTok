@@ -39,7 +39,11 @@ Response (HTTP 201):
   "username": "creator",
   "display_name": null,
   "enabled": true,
-  "created_at": "2026-11-18T00:00:00Z"
+  "created_at": "2026-11-18T00:00:00Z",
+  "last_successful_poll_at": null,
+  "next_poll_at": "2026-11-18T00:00:00Z",
+  "poll_failures": 0,
+  "last_error": null
 }
 ```
 
@@ -48,6 +52,10 @@ The first successful lookup establishes a baseline and does not replay old video
 ### `GET /api/v1/creators`
 
 Returns creators monitored by this VoxyTok instance.
+
+### `GET /api/v1/creators/{id}/sources`
+
+Returns the per-source monitoring state for a creator. Each entry includes the adapter key, health/cooldown status, last attempt and success timestamps, next retry time, failure/success counters, last latency, HTTP status and most recent error details. An empty array means no source has attempted that creator yet. Returns HTTP 404 if the creator does not exist.
 
 ### `DELETE /api/v1/creators/{id}`
 
