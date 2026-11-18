@@ -21,13 +21,13 @@ A successful CI run is necessary but does not prove that TikTok's public pages o
 - [ ] The first successful fetch establishes a baseline and never replays historical videos.
 - [ ] A later publication is normalized and enters the durable outbox once.
 - [ ] Repeated observations across direct TikTok and RSSHub adapters produce one event per creator/video ID.
-- [ ] Undated feed entries are stored only when appropriate and are never emitted as new publications.
+- [ ] Undated feed entries are stored but never emitted as new publications.
 - [ ] A delayed source result is evaluated against the subscription start time, not merely the last poll time.
 - [ ] A 429 response honors `Retry-After`; host-wide cooldown prevents parallel creators from hammering the same upstream.
 - [ ] A failed source falls through to another configured adapter; all-source failure leaves the creator monitored and schedules retry.
 - [ ] Private, missing, challenge and malformed profiles do not silently become successful empty baselines.
 - [ ] Poll leases recover after process termination and do not permanently strand creators.
-- [ ] The configured polling interval and actual detection latency are measured against a real public test profile over a sustained window.
+- [ ] Real-profile testing records the ten-video embed window limitation, any missed publications, detection latency and source failure rates over a sustained window.
 
 ## API and webhook acceptance
 
@@ -58,4 +58,4 @@ Public username monitoring is the V1 product path and does not require TikTok de
 
 ## Release decision
 
-Do not describe V1 as production-validated until all automated gates and applicable deployment checks are green, plus a real public-profile monitoring test has completed. Do not claim guaranteed or real-time TikTok coverage: upstream public endpoints and RSSHub instances can rate-limit, change or become unavailable.
+Do not describe V1 as production-validated until all automated gates and applicable deployment checks are green, plus a real public-profile monitoring test has completed. Do not claim guaranteed or real-time TikTok coverage: upstream public endpoints and RSSHub instances can rate-limit, change or become unavailable. This public-embed design is best-effort monitoring, not a complete archival feed.

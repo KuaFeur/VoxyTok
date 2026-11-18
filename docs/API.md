@@ -122,7 +122,7 @@ Headers:
 - `Idempotency-Key`: stable delivery UUID.
 - `X-VoxyTok-Signature`: `sha256=<hex>` when `WEBHOOK_SECRET` is configured.
 
-Verify HMAC-SHA256 over the exact raw body before JSON parsing. Delivery is at-least-once; deduplicate using the idempotency key.
+Verify HMAC-SHA256 over the exact raw body. Delivery is at-least-once; deduplicate using the idempotency key.
 
 ## Internal acquisition model
 
@@ -131,6 +131,8 @@ RSS is an internal acquisition format only. VoxyTok does not expose an RSS URL t
 The initial retrieval paths are:
 - TikTok public embed hydration data.
 - RSSHub-compatible RSS/Atom feeds from multiple configured instances (fallback). RSSHub's route also uses TikTok's embed page, so the instances are separate intermediaries/caches rather than independent TikTok data providers.
+
+**Coverage limitation:** TikTok documents that Creator Profile Embed contains up to ten recent videos. This is not a complete video-history API; a burst of more than ten posts between successful observations can result in missed events. Public RSSHub instances are third-party infrastructure and do not remove this limitation or provide an availability guarantee. Operators may configure instances they control through `RSSHUB_BASE_URLS`.
 
 The scheduler applies source-specific cooldowns, honors `Retry-After`, backs off after failures and skips sources in cooldown. It never claims that any public source is unlimited or guaranteed. A TikTok challenge, profile privacy change or upstream outage can delay detection.
 

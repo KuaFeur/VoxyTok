@@ -13,9 +13,13 @@ Each source returns a normalized profile and newest-first video records. The ini
 1. **Direct TikTok embed adapter** — requests the public `/embed/@username` page and parses its embedded profile/video state. It does not solve WAF challenges, use cookies, or bypass access controls.
 2. **RSSHub-compatible adapters** — query several configured public RSSHub instances using the TikTok user route and parse RSS 2.0 or Atom. Each host has independent health and cooldown state.
 
-Important limitation: RSSHub's TikTok route also obtains its feed from TikTok's public embed page. These are separate retrieval intermediaries and caches, not independent underlying TikTok data providers. They can provide useful fallback when one route or network path is unavailable, but they cannot guarantee bypass of a TikTok-wide block or outage.
+Important limitations:
 
-The source registry orders adapters and selects the first healthy one. A successful result is normalized before ingestion. PostgreSQL deduplicates by `(creator_id, platform_video_id)`, so the same post found through multiple paths generates one event.
+- TikTok's documented Creator Profile Embed contains a selection of **up to ten of the creator's most recent videos**. This is not a complete video-history API. If more than ten videos are published between successful observations, VoxyTok may miss some of them.
+- RSSHub's TikTok route relies on Puppeteer and also obtains its feed from TikTok's public embed page. These are separate retrieval intermediaries and caches, not independent underlying TikTok data providers. They can help with a transient route/network issue, but they cannot guarantee recovery from a TikTok-wide block or an embed-data change.
+- Public RSSHub instances are third-party infrastructure. Operators can set `RSSHUB_BASE_URLS` to instances they control; the default public instances are best-effort fallbacks, not a service-level guarantee.
+
+VoxyTok does not represent this acquisition path as an official TikTok API, a complete archive, or guaranteed real-time monitoring. A deployment that requires complete capture should use a supported, authorized data source with an explicit availability contract.
 
 ## Rate-limit and resilience policy
 
@@ -68,7 +72,7 @@ Before production deployment:
 2. verify the direct TikTok embed parser against fixture snapshots;
 3. verify RSSHub route availability and feed parsing against live public instances;
 4. test first-sync baseline, delayed posts, source failover, cooldown, concurrency and deduplication against PostgreSQL;
-5. record actual detection latency and source failure rates over a sustained test window;
+5. record actual detection latency, missed-publication behavior and source failure rates over a sustained test window;
 6. update GitBook docs and validate the Docker image on Pelican/Pterodactyl.
 
-No source should be described as unlimited or guaranteed. The goal is minimal user effort and resilient best-effort public monitoring.
+No source should be described as unlimited or guaranteed. The goal is minimal user effort and resilient best-effort public monitoring, with the ten-video embed window and third-party source dependencies treated as explicit limitations.
