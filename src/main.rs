@@ -1111,7 +1111,7 @@ async fn main() -> anyhow::Result<()> {
     let mut public_sources: Vec<sources::SourceAdapter> = Vec::new();
     public_sources.push(sources::SourceAdapter::TikTokPublicProfile(sources::TikTokPublicProfileSource::new(http.clone())));
     let rss_bases = env::var("RSSHUB_BASE_URLS")
-        .unwrap_or_else(|_| "https://rsshub.app".to_owned());
+        .unwrap_or_else(|_| "https://rsshub.app,https://rsshub.rssforever.com,https://rsshub.joshrandall.net".to_owned());
     for raw_base in rss_bases.split(',').map(str::trim).filter(|value| !value.is_empty()) {
         let base = Url::parse(raw_base)?;
         if base.scheme() != "https" || base.host_str().is_none() {
