@@ -72,7 +72,7 @@ Request:
   "published_at": null,
   "payload": {
     "event": "tiktok.video.published",
-    "provider": "tiktok_embed",
+    "provider": "tiktok_public_profile",
     "creator": { "username": "creator" },
     "video": {
       "id": "7350000000000000000",
@@ -95,7 +95,7 @@ For a new publication, VoxyTok sends:
 ```json
 {
   "event": "tiktok.video.published",
-  "provider": "tiktok_embed",
+  "provider": "tiktok_public_profile",
   "creator": {
     "id": "CREATOR_UUID",
     "username": "creator",
