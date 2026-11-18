@@ -1,7 +1,8 @@
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde_json::json;
 use sqlx::{FromRow, PgPool};
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
+use tokio::task::JoinSet;
 use uuid::Uuid;
 use crate::sources::{PublicProfile, SourceAdapter, SourceFailure};
 
@@ -58,10 +59,10 @@ async fn record_source_failure(db: &PgPool, creator_id: Uuid, source_key: &str, 
     Ok(())
 }
 
-fn should_emit(first_sync: bool, last_polled_at: Option<DateTime<Utc>>, published_at: Option<&DateTime<Utc>>) -> bool {
+fn should_emit(first_sync: bool, last_polled_at: Option<&DateTime<Utc>>, published_at: Option<&DateTime<Utc>>) -> bool {
     if first_sync { return false; }
     let Some(last_polled_at) = last_polled_at else { return false; };
-    published_at.is_some_and(|published| *published >= last_polled_at - ChronoDuration::minutes(2))
+    published_at.is_some_and(|published| published >= &(last_polled_at.to_owned() - ChronoDuration::minutes(2)))
 }
 
 async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfile, source_key: &str, poll_interval: Duration) -> anyhow::Result<usize> {
@@ -92,7 +93,7 @@ async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfil
             "INSERT INTO videos (id,creator_id,platform_video_id,payload,published_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (creator_id,platform_video_id) DO NOTHING RETURNING id"
         ).bind(Uuid::new_v4()).bind(creator.id).bind(&video.id).bind(&payload).bind(video.published_at.clone())
             .fetch_optional(&mut *tx).await?;
-        if let Some(video_id) = video_id && should_emit(first_sync, creator.last_polled_at, video.published_at.as_ref()) {
+        if let Some(video_id) = video_id && should_emit(first_sync, creator.last_polled_at.as_ref(), video.published_at.as_ref()) {
                 sqlx::query("INSERT INTO deliveries (id,video_id) VALUES ($1,$2)")
                     .bind(Uuid::new_v4()).bind(video_id).execute(&mut *tx).await?;
             inserted += 1;
@@ -138,15 +139,33 @@ pub async fn run(db: PgPool, sources: Vec<SourceAdapter>, poll_interval: Duratio
         tracing::error!("public profile monitor has no acquisition sources; creator monitoring is disabled");
         return;
     }
+    let sources = Arc::new(sources);
     loop {
         let due = sqlx::query_as::<_, DueCreator>(
             "SELECT id,username,display_name,last_polled_at,poll_failures FROM creators WHERE enabled=TRUE AND tiktok_open_id IS NULL AND next_poll_at<=NOW() AND (poll_lease_until IS NULL OR poll_lease_until<NOW()) ORDER BY next_poll_at,created_at LIMIT 10"
         ).fetch_all(&db).await;
         match due {
             Ok(creators) => {
+                let mut tasks = JoinSet::new();
                 for creator in creators {
-                    if let Err(error) = poll_one(&db, creator, &sources, poll_interval).await {
-                        tracing::error!(%error, "public profile polling failed");
+                    while tasks.len() >= 4 {
+                        if let Some(result) = tasks.join_next().await {
+                            if let Err(error) = result {
+                                tracing::error!(%error, "public profile polling task failed");
+                            }
+                        }
+                    }
+                    let task_db = db.clone();
+                    let task_sources = sources.clone();
+                    tasks.spawn(async move {
+                        poll_one(&task_db, creator, task_sources.as_slice(), poll_interval).await
+                    });
+                }
+                while let Some(result) = tasks.join_next().await {
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => tracing::error!(%error, "public profile polling failed"),
+                        Err(error) => tracing::error!(%error, "public profile polling task failed"),
                     }
                 }
             }
