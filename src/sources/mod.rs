@@ -46,7 +46,7 @@ impl TikTokEmbedSource {
     pub fn new(client: Client) -> Self { Self { client } }
 
     fn parse(&self, username: &str, html: &str) -> Result<PublicProfile> {
-        let marker = "id=\"__FRONTITY_CONNECT_STATE__\"";
+        let marker = "id=\"__UNIVERSAL_DATA_FOR_REHYDRATION__\"";
         let marker_pos = html.find(marker).ok_or_else(|| anyhow!("TikTok embed state script is missing"))?;
         let script_start = html[marker_pos..].find('>').map(|n| marker_pos + n + 1)
             .ok_or_else(|| anyhow!("TikTok embed state script has no opening delimiter"))?;
@@ -181,7 +181,7 @@ fn parse_feed(username: &str, xml: &str) -> Result<PublicProfile> {
         let id = tag_value(entry, "guid").or_else(|| tag_value(entry, "id"))
             .or_else(|| tag_value(entry, "link"));
         let Some(id) = id else { continue; };
-        let link = tag_value(entry, "link").unwrap_or_else(|| id.clone());
+        let link = tag_value(entry, "link").or_else(|| attribute_value(entry, "link", "href")).unwrap_or_else(|| id.clone());
         let video_id = link.rsplit('/').next().unwrap_or(&id).split('?').next().unwrap_or(&id).to_owned();
         if video_id.is_empty() { continue; }
         let title = tag_value(entry, "title");
@@ -216,6 +216,16 @@ fn split_elements<'a>(xml: &'a str, name: &str) -> Vec<&'a str> {
     result
 }
 
+fn attribute_value(xml: &str, tag: &str, attribute: &str) -> Option<String> {
+    let open = format!("<{tag}");
+    let start = xml.find(&open)?;
+    let end = xml[start..].find('>')? + start;
+    let header = &xml[start..end];
+    let marker = format!("{attribute}=\\\"");
+    let value_start = header.find(&marker)? + marker.len();
+    let value_end = header[value_start..].find('\\\"')? + value_start;
+    Some(header[value_start..value_end].replace("&amp;", "&"))
+}
 fn tag_value(xml: &str, name: &str) -> Option<String> {
     let open = format!("<{name}");
     let start = xml.find(&open)?;
@@ -236,7 +246,7 @@ mod tests {
 
     #[test]
     fn parses_tiktok_embedded_profile_state() {
-        let html = r#"<script id="__FRONTITY_CONNECT_STATE__" type="application/json">{"source":{"data":{"/embed/@demo":{"userInfo":{"uniqueId":"demo","nickname":"Demo","avatarThumbUrl":"https://img"},"videoList":[{"id":"7350000000000000000","desc":"hello","coverUrl":"https://cover","createTime":1710000000}]}}}}</script>"#;
+        let html = r#"<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">{"source":{"data":{"/embed/@demo":{"userInfo":{"uniqueId":"demo","nickname":"Demo","avatarThumbUrl":"https://img"},"videoList":[{"id":"7350000000000000000","desc":"hello","coverUrl":"https://cover","createTime":1710000000}]}}}}</script>"#;
         let client = Client::builder().build().unwrap();
         let source = TikTokEmbedSource::new(client);
         let profile = source.parse("demo", html).unwrap();
