@@ -3,9 +3,7 @@ info:
   title: VoxyTok API
   version: 0.3.0
   description: >
-    Self-hosted TikTok event gateway. One deployment belongs to one consuming
-    bot or application. Management routes use a bearer API token. TikTok
-    creators must authorize their own accounts through Login Kit.
+    Self-hosted TikTok public-profile monitoring gateway. One deployment belongs to one consuming bot or application. Add creators by public username; no creator OAuth is required. Management routes use a bearer API token.
 servers:
   - url: https://voxytok.example.com
 security:
@@ -35,8 +33,9 @@ paths:
           description: Database unavailable
   /api/v1/oauth/tiktok/start:
     post:
-      summary: Start TikTok Login Kit authorization
-      description: Creates a one-time OAuth state bound to a caller-generated opaque reference. The URL expires after ten minutes.
+      deprecated: true
+      summary: Legacy - start TikTok Login Kit authorization
+      description: Legacy compatibility endpoint. New integrations should add a public username through POST /api/v1/creators.
       requestBody:
         required: true
         content:
@@ -63,7 +62,8 @@ paths:
         "503": { description: TikTok provider is not configured }
   /api/v1/oauth/tiktok/connections/{reference}:
     get:
-      summary: Get OAuth connection status
+      deprecated: true
+      summary: Legacy - get OAuth connection status
       description: Looks up the SHA-256 digest of the caller-generated opaque reference. The raw reference is never stored.
       parameters:
         - in: path
@@ -86,9 +86,10 @@ paths:
         "404": { description: Reference not found }
   /oauth/tiktok/callback:
     get:
+      deprecated: true
       security: []
       summary: TikTok OAuth callback
-      description: Public callback registered in TikTok developer settings. OAuth state is validated and consumed once.
+      description: Legacy callback retained temporarily for migration compatibility. Not used by public-profile monitoring.
       parameters:
         - in: query
           name: code
@@ -128,8 +129,8 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Creator" }
     post:
-      summary: Create a local creator record
-      description: This does not grant TikTok access. The official provider polls only creators who completed OAuth.
+      summary: Add a public TikTok profile
+      description: Adds a public profile by username and schedules automatic monitoring. No TikTok OAuth, account linking, cookies or video submission are required. The first successful lookup establishes a baseline without replaying historical videos.
       requestBody:
         required: true
         content:
@@ -141,14 +142,14 @@ paths:
                 username: { type: string, maxLength: 64 }
       responses:
         "201":
-          description: Creator record created
+          description: Public creator added and scheduled for monitoring
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Creator" }
         "422": { description: Invalid username }
   /api/v1/creators/{id}:
     delete:
-      summary: Remove a creator and related event history
+      summary: Stop monitoring a creator and remove related event history
       parameters:
         - $ref: "#/components/parameters/UuidPath"
       responses:
