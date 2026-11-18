@@ -1077,12 +1077,28 @@ async fn main() -> anyhow::Result<()> {
     if api_token.len()<32 { anyhow::bail!("API_TOKEN must contain at least 32 characters"); }
     let database_url=env::var("DATABASE_URL").map_err(|_|anyhow::anyhow!("DATABASE_URL must be configured"))?;
     let db=PgPoolOptions::new().max_connections(10).acquire_timeout(Duration::from_secs(5)).connect(&database_url).await?;
-    sqlx::raw_sql(include_str!("../migrations/0001_initial.sql")).execute(&db).await?;
-    sqlx::raw_sql(include_str!("../migrations/0002_single_instance_outbox.sql")).execute(&db).await?;
-    sqlx::raw_sql(include_str!("../migrations/0003_tiktok_oauth.sql")).execute(&db).await?;
-    sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await?;
-    sqlx::raw_sql(include_str!("../migrations/0005_oauth_connection_tracking.sql")).execute(&db).await?;
-    sqlx::raw_sql(include_str!("../migrations/0006_public_profile_sources.sql")).execute(&db).await?;
+    // Hold a session-level advisory lock on one connection for the complete
+    // migration sequence. This serializes concurrent replicas at first boot.
+    let mut migration_connection = db.acquire().await?;
+    const MIGRATION_LOCK_ID: i64 = 7_604_202_611;
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(MIGRATION_LOCK_ID)
+        .fetch_one(&mut *migration_connection).await?;
+    let migration_result: anyhow::Result<()> = async {
+        sqlx::raw_sql(include_str!("../migrations/0001_initial.sql")).execute(&mut *migration_connection).await?;
+        sqlx::raw_sql(include_str!("../migrations/0002_single_instance_outbox.sql")).execute(&mut *migration_connection).await?;
+        sqlx::raw_sql(include_str!("../migrations/0003_tiktok_oauth.sql")).execute(&mut *migration_connection).await?;
+        sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&mut *migration_connection).await?;
+        sqlx::raw_sql(include_str!("../migrations/0005_oauth_connection_tracking.sql")).execute(&mut *migration_connection).await?;
+        sqlx::raw_sql(include_str!("../migrations/0006_public_profile_sources.sql")).execute(&mut *migration_connection).await?;
+        sqlx::raw_sql(include_str!("../migrations/0007_shared_source_cooldowns.sql")).execute(&mut *migration_connection).await?;
+        Ok(())
+    }.await;
+    let unlock_result = sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(MIGRATION_LOCK_ID)
+        .fetch_one(&mut *migration_connection).await;
+    migration_result?;
+    unlock_result?;
 
     let webhook_url=env::var("WEBHOOK_URL").ok().filter(|value|!value.trim().is_empty());
     if let Some(url)=&webhook_url { validate_webhook_url(url)?; }
@@ -1091,10 +1107,10 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("WEBHOOK_SECRET must contain at least 32 characters");
     }
     let tiktok_values=(
-        env::var("TIKTOK_CLIENT_KEY").ok(),
-        env::var("TIKTOK_CLIENT_SECRET").ok(),
-        env::var("TIKTOK_REDIRECT_URI").ok(),
-        env::var("TOKEN_ENCRYPTION_KEY").ok(),
+        env::var("TIKTOK_CLIENT_KEY").ok().filter(|v| !v.trim().is_empty() && v != "unset"),
+        env::var("TIKTOK_CLIENT_SECRET").ok().filter(|v| !v.trim().is_empty() && v != "unset"),
+        env::var("TIKTOK_REDIRECT_URI").ok().filter(|v| !v.trim().is_empty() && v != "unset"),
+        env::var("TOKEN_ENCRYPTION_KEY").ok().filter(|v| !v.trim().is_empty() && v != "unset"),
     );
     let tiktok=match tiktok_values {
         (None,None,None,None)=>None,
@@ -1226,6 +1242,7 @@ mod tests {
         sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0005_oauth_connection_tracking.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0006_public_profile_sources.sql")).execute(&db).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0007_shared_source_cooldowns.sql")).execute(&db).await.unwrap();
 
         let creator_id = Uuid::new_v4();
         let username = format!("ci_{}", Uuid::new_v4().simple());

@@ -41,6 +41,8 @@ jobs:
         with:
           node-version: 22
       - run: node --check examples/discord.js/index.js
+      - name: Validate Pelican egg JSON
+        run: python -m json.tool deploy/pelican/egg-voxytok.json >/dev/null
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

@@ -38,8 +38,8 @@ If every available path is unavailable, the creator remains monitored and retrie
 ## Detection and delivery
 
 - First successful lookup establishes a baseline and does not replay the existing catalogue.
-- Later lookups inspect returned videos and emit only new IDs with a publication timestamp within a two-minute overlap of the previous successful poll.
-- Videos discovered through a different feed but older than the watermark are stored without creating a notification.
+- After the first successful baseline, newly observed video IDs are eligible when their publication timestamp is at or after `monitoring_started_at - 2 minutes`. Eligibility is anchored to subscription start, not the last successful retrieval, so delayed or cached source visibility cannot permanently suppress a post.
+- Video IDs are deduplicated in PostgreSQL. Undated videos are stored but not emitted because their publication eligibility cannot be established.
 - The unique database constraint prevents duplicates.
 - New publications enter the existing durable outbox.
 - Existing signed webhook delivery, idempotency keys, retries and one-webhook-per-instance behavior remain unchanged.

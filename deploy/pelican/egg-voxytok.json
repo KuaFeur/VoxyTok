@@ -7,7 +7,7 @@
   "exported_at": "2026-11-17T00:00:00+00:00",
   "name": "VoxyTok",
   "author": "Kua <https://github.com/KuaFeur>",
-  "description": "Public TikTok profile monitoring gateway. Add creators by username only; multi-source polling and embedded PostgreSQL included. No creator OAuth or video submission required.",
+  "description": "Public TikTok profile monitoring gateway. Add creators by username only; multi-source polling and embedded PostgreSQL included. No creator OAuth or video submission required. Existing installations with legacy OAuth creator records must retain TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REDIRECT_URI and TOKEN_ENCRYPTION_KEY together; never set empty values.",
   "features": null,
   "docker_images": {
     "ghcr.io/kuafeur/voxytok:latest": "ghcr.io/kuafeur/voxytok:latest"
@@ -28,6 +28,46 @@
     }
   },
   "variables": [
+    {
+      "name": "Legacy TikTok Client Key",
+      "description": "Optional legacy OAuth compatibility. Set all four legacy TikTok variables together or leave all four as unset.",
+      "env_variable": "TIKTOK_CLIENT_KEY",
+      "default_value": "unset",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|max:255",
+      "field_type": "password"
+    },
+    {
+      "name": "Legacy TikTok Client Secret",
+      "description": "Optional legacy OAuth client secret. Configure together with the other three legacy TikTok variables.",
+      "env_variable": "TIKTOK_CLIENT_SECRET",
+      "default_value": "unset",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|max:255",
+      "field_type": "password"
+    },
+    {
+      "name": "Legacy TikTok Redirect URI",
+      "description": "Optional legacy OAuth callback URL. Configure together with the other three legacy TikTok variables.",
+      "env_variable": "TIKTOK_REDIRECT_URI",
+      "default_value": "unset",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|max:2048",
+      "field_type": "text"
+    },
+    {
+      "name": "Legacy TikTok Token Encryption Key",
+      "description": "Optional legacy OAuth token encryption key (64 hexadecimal characters). Configure together with the other three legacy TikTok variables.",
+      "env_variable": "TOKEN_ENCRYPTION_KEY",
+      "default_value": "unset",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|max:128",
+      "field_type": "password"
+    },
     {
       "name": "HTTP Port",
       "description": "Internal HTTP listen port. Allocate and expose this port in Pelican.",
