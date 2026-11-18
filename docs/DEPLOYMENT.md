@@ -9,7 +9,7 @@ This runbook describes how to deploy VoxyTok on a Pelican/Wings node. It does no
 - Source commit: `3b610ff87e0ca63c1b26aa352677346f37e08454`
 - GitHub Actions run: [CI #120](https://github.com/KuaFeur/VoxyTok/actions/runs/44289701890)
 
-The image was pushed to GHCR only after Rust checks, the container build and the embedded-PostgreSQL/HTTP smoke test passed. The digest is immutable; `:latest` is a moving tag and may point to a newer build after a later push to `main`.
+The image was pushed to GHCR only after Rust checks, the container build and the embedded-PostgreSQL/HTTP smoke test passed. **The package's anonymous-pull visibility has not been verified.** GitHub documents that a newly published container package defaults to private; before using it from Pelican without registry credentials, open the repository's Packages section, open `voxytok`, then Package settings and set visibility to Public. Alternatively, configure authenticated GHCR pulls on the Wings host. See [GitHub's container-registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry). The digest is immutable; `:latest` is a moving tag and may point to a newer build after a later push to `main`.
 
 For a reproducible deployment, use the digest reference if the Pelican Docker image field accepts it:
 
