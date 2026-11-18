@@ -13,7 +13,7 @@
     "ghcr.io/kuafeur/voxytok:latest": "ghcr.io/kuafeur/voxytok:latest"
   },
   "file_denylist": [],
-  "startup": "/usr/local/bin/voxytok-entrypoint",
+  "startup": "bash /usr/local/bin/voxytok-entrypoint",
   "config": {
     "files": "{}",
     "startup": "{\"done\":\"VoxyTok HTTP server started\"}",
