@@ -101,7 +101,8 @@ async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfil
         }
         tx.commit().await?;
     }
-    let jitter_seconds = (OsRng.next_u32() % 61) as i64;
+    let mut rng = OsRng;
+    let jitter_seconds = (rng.next_u32() % 61) as i64;
     let next_poll_seconds = poll_interval.as_secs().max(60) as i64 + jitter_seconds;
     sqlx::query("UPDATE creators SET display_name=COALESCE($2,display_name),last_polled_at=NOW(),last_successful_poll_at=NOW(),next_poll_at=NOW()+($3*INTERVAL '1 second'),poll_lease_until=NULL,poll_failures=0,last_error=NULL WHERE id=$1")
         .bind(creator.id).bind(profile.display_name).bind(next_poll_seconds).execute(db).await?;
