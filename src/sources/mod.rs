@@ -300,6 +300,25 @@ mod tests {
     }
 
     #[test]
+    fn private_profile_detection_uses_structured_account_state_only() {
+        let client = Client::builder().build().unwrap();
+        let source = TikTokPublicProfileSource::new(client);
+        let public_html = r#"<script id="__FRONTITY_CONNECT_STATE__" type="application/json">{"userInfo":{"uniqueId":"demo","nickname":"Demo","privateAccount":false},"videoList":[{"id":"123","desc":"this account is private"}]}</script>"#;
+        assert!(source.parse("demo", public_html).is_ok());
+
+        let private_html = r#"<script id="__FRONTITY_CONNECT_STATE__" type="application/json">{"userInfo":{"uniqueId":"demo","privateAccount":true},"videoList":[]}</script>"#;
+        assert!(source.parse("demo", private_html).is_err());
+    }
+
+    #[test]
+    fn tiktok_host_cooldown_is_shared_without_changing_provider_key() {
+        let client = Client::builder().build().unwrap();
+        let source = SourceAdapter::TikTokPublicProfile(TikTokPublicProfileSource::new(client));
+        assert_eq!(source.key(), "tiktok_public_profile");
+        assert_eq!(source.host_key(), "tiktok.com");
+    }
+
+    #[test]
     fn accepts_valid_empty_rss_and_atom_feeds() {
         let rss = parse_feed("demo", "<rss><channel></channel></rss>").unwrap();
         assert!(rss.videos.is_empty());
