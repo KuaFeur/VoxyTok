@@ -55,7 +55,7 @@ async fn record_host_success(db: &PgPool, source_key: &str) -> anyhow::Result<()
 }
 
 async fn record_host_failure(db: &PgPool, source_key: &str, error: &SourceFailure) -> anyhow::Result<()> {
-    if matches!(error, SourceFailure::NotFound) {
+    if matches!(error, SourceFailure::NotFound | SourceFailure::Malformed(_)) {
         return Ok(());
     }
     let (_, _, retry_after) = failure_details(error);
