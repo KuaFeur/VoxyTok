@@ -45,6 +45,8 @@ jobs:
         run: node --check examples/discord.js/index.js
       - name: Validate Pelican egg JSON
         run: python -m json.tool deploy/pelican/egg-voxytok.json >/dev/null
+      - name: Validate shell entrypoint syntax
+        run: bash -n docker/entrypoint.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -55,7 +57,7 @@ jobs:
         run: git diff --check
       - name: Compile all targets
         run: cargo check --locked --all-targets
-      - name: Run unit and PostgreSQL integration tests
+      - name: Run Rust unit tests
         run: cargo test --locked --all-targets
       - name: Run strict Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
