@@ -90,6 +90,10 @@ Schedules a failed or retryable webhook delivery immediately.
 
 ## Webhook contract
 
+For a new publication, VoxyTok sends. The `provider` field is the **source adapter key that produced the event**, not a fixed platform identifier:
+- `tiktok_public_profile` for the direct TikTok public embed adapter.
+- `rsshub:<hostname>` for an RSSHub fallback adapter (for example, `rsshub:rsshub.app`).
+
 For a new publication, VoxyTok sends:
 
 ```json
