@@ -57,18 +57,18 @@ jobs:
         id: tags
         shell: bash
         run: |
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$ ]]; then
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$ ]]; then
             echo "Release tags must follow semantic versioning (for example v1.0.0 or v1.0.0-rc.1)." >&2
             exit 1
           fi
           tags="$REGISTRY/$IMAGE_NAME:$GITHUB_REF_NAME"
           # A prerelease (alpha, beta, rc) must never replace the stable latest tag.
           if [[ "$GITHUB_REF_NAME" != *-* ]]; then
-            tags+=$'\\n'"$REGISTRY/$IMAGE_NAME:latest"
+            tags+=$'\n'"$REGISTRY/$IMAGE_NAME:latest"
           fi
           {
             echo "value<<EOF"
-            printf '%s\\n' "$tags"
+            printf '%s\n' "$tags"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
