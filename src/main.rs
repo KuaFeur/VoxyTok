@@ -46,6 +46,7 @@ struct AppState {
     webhook_url: Option<String>,
     webhook_secret: Option<String>,
     tiktok: Option<TikTokConfig>,
+    public_source_count: usize,
     http: Client,
     token_refresh_lock: Arc<tokio::sync::Mutex<()>>,
 }
@@ -56,6 +57,8 @@ struct HealthResponse {
     service: &'static str,
     webhook_configured: bool,
     tiktok_provider_configured: bool,
+    public_monitor_configured: bool,
+    public_source_count: usize,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -251,6 +254,8 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
         service: "voxytok",
         webhook_configured: state.webhook_url.is_some(),
         tiktok_provider_configured: state.tiktok.is_some(),
+        public_monitor_configured: state.public_source_count > 0,
+        public_source_count: state.public_source_count,
     })
 }
 
@@ -262,6 +267,8 @@ async fn readiness(State(state): State<AppState>) -> Result<Json<HealthResponse>
         service: "voxytok",
         webhook_configured: state.webhook_url.is_some(),
         tiktok_provider_configured: state.tiktok.is_some(),
+        public_monitor_configured: state.public_source_count > 0,
+        public_source_count: state.public_source_count,
     }))
 }
 
@@ -1125,11 +1132,12 @@ async fn main() -> anyhow::Result<()> {
     }
     let poll_interval_seconds = env::var("PUBLIC_POLL_INTERVAL_SECONDS")
         .unwrap_or_else(|_| "300".to_owned()).parse::<u64>()?.clamp(60, 3600);
+    let public_source_count = public_sources.len();
     let public_db = db.clone();
     let public_poll_interval = Duration::from_secs(poll_interval_seconds);
 
     let state=AppState{
-        db,api_token,webhook_url,webhook_secret,tiktok,http,
+        db,api_token,webhook_url,webhook_secret,tiktok,public_source_count,http,
         token_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
     tokio::spawn(dispatch_loop(state.clone()));
