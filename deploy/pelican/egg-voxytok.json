@@ -4,10 +4,10 @@
     "version": "PTDL_v2",
     "update_url": null
   },
-  "exported_at": "2026-11-17T00:00:00+00:00",
+  "exported_at": "2026-11-18T00:00:00+00:00",
   "name": "VoxyTok",
   "author": "Kua <https://github.com/KuaFeur>",
-  "description": "Public TikTok profile monitoring gateway. Add creators by username only; multi-source polling and embedded PostgreSQL included. No creator OAuth or video submission required. Existing installations with legacy OAuth creator records must retain TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REDIRECT_URI and TOKEN_ENCRYPTION_KEY together; never set empty values.",
+  "description": "VoxyTok 1.0.0-rc.1 — public TikTok profile monitoring by username. One isolated instance for one bot/application, multi-source polling and embedded PostgreSQL. No creator OAuth or video submission required. Existing installations with legacy OAuth creator records must retain TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REDIRECT_URI and TOKEN_ENCRYPTION_KEY together; never set empty values.",
   "features": null,
   "docker_images": {
     "ghcr.io/kuafeur/voxytok:latest": "ghcr.io/kuafeur/voxytok:latest"
@@ -164,7 +164,7 @@
       "env_variable": "PUBLIC_POLL_INTERVAL_SECONDS",
       "default_value": "300",
       "user_viewable": false,
-      "user_editable": false,
+      "user_editable": true,
       "rules": "required|integer|between:60,3600",
       "field_type": "text"
     },
@@ -174,7 +174,7 @@
       "env_variable": "RSSHUB_BASE_URLS",
       "default_value": "https://rsshub.app,https://rsshub.rssforever.com,https://rsshub.joshrandall.net",
       "user_viewable": false,
-      "user_editable": false,
+      "user_editable": true,
       "rules": "required|string|max:2048",
       "field_type": "text"
     }
