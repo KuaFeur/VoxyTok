@@ -92,7 +92,7 @@ async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfil
         let mut tx = db.begin().await?;
         let video_id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO videos (id,creator_id,platform_video_id,payload,published_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (creator_id,platform_video_id) DO NOTHING RETURNING id"
-        ).bind(Uuid::new_v4()).bind(creator.id).bind(&video.id).bind(&payload).bind(video.published_at.clone())
+        ).bind(Uuid::new_v4()).bind(creator.id).bind(&video.id).bind(&payload).bind(video.published_at)
             .fetch_optional(&mut *tx).await?;
         if let Some(video_id) = video_id && should_emit(first_sync, creator.last_polled_at.as_ref(), video.published_at.as_ref()) {
                 sqlx::query("INSERT INTO deliveries (id,video_id) VALUES ($1,$2)")
@@ -154,10 +154,8 @@ pub async fn run(db: PgPool, sources: Vec<SourceAdapter>, poll_interval: Duratio
                 let mut tasks = JoinSet::new();
                 for creator in creators {
                     while tasks.len() >= 4 {
-                        if let Some(result) = tasks.join_next().await {
-                            if let Err(error) = result {
-                                tracing::error!(%error, "public profile polling task failed");
-                            }
+                        if let Some(Err(error)) = tasks.join_next().await {
+                            tracing::error!(%error, "public profile polling task failed");
                         }
                     }
                     let task_db = db.clone();
