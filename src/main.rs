@@ -1227,6 +1227,7 @@ mod tests {
         sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0005_oauth_connection_tracking.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0006_public_profile_sources.sql")).execute(&db).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0007_shared_source_cooldowns.sql")).execute(&db).await.unwrap();
 
         let creator_id = Uuid::new_v4();
         let username = format!("ci_{}", Uuid::new_v4().simple());
