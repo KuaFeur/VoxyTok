@@ -4,7 +4,7 @@ This example demonstrates the VoxyTok V1 public-profile workflow.
 
 ## What it does
 
-- Registers `/tiktok-add username`, `/tiktok-remove username` and `/tiktok-list`.
+- Registers admin-only `/tiktok-add username`, `/tiktok-remove username` and `/tiktok-list` commands (Manage Server permission).
 - Adds public TikTok profiles by username through the VoxyTok API. No TikTok OAuth or creator account linking is involved.
 - Receives signed VoxyTok webhooks over HTTP.
 - Verifies HMAC-SHA256 using the raw request body.
