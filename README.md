@@ -58,11 +58,13 @@ Default polling interval is five minutes. The operator can set `PUBLIC_POLL_INTE
 
 `ghcr.io/kuafeur/voxytok:latest`
 
-Persist `VOXYTOK_DATA_DIR` across restarts and upgrades. It contains the embedded PostgreSQL cluster and must not be deleted.
+Persist `VOXYTOK_DATA_DIR` across restarts and upgrades. It contains application data and, by default, the embedded PostgreSQL cluster. If `POSTGRES_DATA_DIR` is set, persist that actual PostgreSQL path separately as well.
+
+The main-branch workflow publishes `:latest` only after Rust checks, the container build and PostgreSQL/API smoke tests pass. The separate tag workflow also publishes `:latest` when a `v*` tag is pushed, but it does not depend on those CI checks. A tag-triggered image must therefore not be assumed validated. For production, verify the source commit and successful CI run, then pin the corresponding immutable image digest. See the [Pelican deployment and rollback runbook](docs/DEPLOYMENT.md).
 
 ## Quick start
 
-1. Deploy the container and persist `VOXYTOK_DATA_DIR`.
+1. Deploy the container and persist `VOXYTOK_DATA_DIR` and the actual PostgreSQL data directory if `POSTGRES_DATA_DIR` is configured.
 2. Configure `API_TOKEN`, `POSTGRES_PASSWORD`, `WEBHOOK_URL` and `WEBHOOK_SECRET`.
 3. Start adding creators with `POST /api/v1/creators` and a username.
 4. Receive `tiktok.video.published` events at the configured webhook.
@@ -84,11 +86,11 @@ All `/api/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 | `GET` | `/healthz` | Liveness |
 | `GET` | `/readyz` | PostgreSQL readiness |
 
-See [API reference](docs/API.md), [OpenAPI specification](docs/openapi.yaml) and [integration guide](docs/INTEGRATION.md).
+See [API reference](docs/API.md), [OpenAPI specification](docs/openapi.yaml), [integration guide](docs/INTEGRATION.md) and [deployment runbook](docs/DEPLOYMENT.md).
 
 ## Development status
 
-The public-profile multi-source implementation is under active development on the `feature/public-profile-monitoring` branch. Do not deploy that branch as a production replacement until CI, parser fixtures, RSS route compatibility and live profile tests pass.
+The public-profile monitoring implementation is merged into `main`. The main-branch CI validates Rust formatting, checks, tests and Clippy, builds the container, smoke-tests embedded PostgreSQL and the HTTP API, then publishes `ghcr.io/kuafeur/voxytok:latest` to GHCR. The separate version-tag workflow publishes version tags and `:latest` without depending on those checks.
 
 ## License
 
