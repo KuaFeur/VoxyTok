@@ -60,7 +60,7 @@ Default polling interval is five minutes. The operator can set `PUBLIC_POLL_INTE
 
 Persist `VOXYTOK_DATA_DIR` across restarts and upgrades. It contains application data and, by default, the embedded PostgreSQL cluster. If `POSTGRES_DATA_DIR` is set, persist that actual PostgreSQL path separately as well.
 
-The main-branch workflow publishes `:latest` only after Rust checks, the container build and PostgreSQL/API smoke tests pass. A version tag is published only when the exact commit already has a successful main-branch CI run. Prerelease tags such as `v1.0.0-rc.1` never replace stable `:latest`. For production, verify the source commit and successful CI run, then pin the corresponding immutable image digest. See the [Pelican deployment and rollback runbook](docs/DEPLOYMENT.md).
+The main-branch workflow publishes `:latest` only after Rust checks, the container build and embedded-PostgreSQL/API smoke tests pass. A version tag is published only when the exact commit already has a successful main-branch CI run. Prerelease tags such as `v1.0.0-rc.1` never replace stable `:latest`. For production, verify the source commit and successful CI run, then pin the corresponding immutable image digest. See the [Pelican deployment and rollback runbook](docs/DEPLOYMENT.md).
 
 ## Quick start
 
@@ -87,11 +87,11 @@ All `/api/v1/*` routes require `Authorization: Bearer <API_TOKEN>`.
 | `GET` | `/healthz` | Liveness |
 | `GET` | `/readyz` | PostgreSQL readiness |
 
-See [API reference](docs/API.md), [OpenAPI specification](docs/openapi.yaml), [integration guide](docs/INTEGRATION.md) and [deployment runbook](docs/DEPLOYMENT.md).
+See [API reference](docs/API.md), [OpenAPI specification](docs/openapi.yaml), [integration guide](docs/INTEGRATION.md), [V1 test plan](docs/TESTING_V1.md) and [deployment runbook](docs/DEPLOYMENT.md).
 
 ## Development status
 
-The public-profile monitoring implementation is merged into `main`. The main-branch CI validates Rust formatting, checks, tests and Clippy, builds the container, smoke-tests embedded PostgreSQL and the HTTP API, then publishes `ghcr.io/kuafeur/voxytok:latest` to GHCR. The separate version-tag workflow publishes version tags and `:latest` without depending on those checks.
+The VoxyTok V1 release candidate is `1.0.0-rc.1`. The main-branch CI validates Rust formatting, compilation, unit tests and Clippy, builds the container, smoke-tests embedded PostgreSQL and the HTTP API, then publishes `ghcr.io/kuafeur/voxytok:latest` to GHCR. A version tag is published only when that exact commit already has a successful main-branch CI run. Prerelease tags such as `v1.0.0-rc.1` do not replace stable `:latest`.
 
 ## License
 

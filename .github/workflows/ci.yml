@@ -45,6 +45,8 @@ jobs:
         run: node --check examples/discord.js/index.js
       - name: Validate Pelican egg JSON
         run: python -m json.tool deploy/pelican/egg-voxytok.json >/dev/null
+      - name: Validate shell entrypoint syntax
+        run: bash -n docker/entrypoint.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -55,7 +57,7 @@ jobs:
         run: git diff --check
       - name: Compile all targets
         run: cargo check --locked --all-targets
-      - name: Run unit and PostgreSQL integration tests
+      - name: Run Rust unit tests
         run: cargo test --locked --all-targets
       - name: Run strict Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
@@ -130,6 +132,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push latest image
+        id: publish
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -137,3 +140,18 @@ jobs:
           tags: ghcr.io/kuafeur/voxytok:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Record immutable image reference
+        env:
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$IMAGE_DIGEST"
+          {
+            printf '%s\n' '### Published container image'
+            printf '%s\n' "- Immutable image: ghcr.io/kuafeur/voxytok@$IMAGE_DIGEST"
+            printf '%s\n' '- Mutable tag: ghcr.io/kuafeur/voxytok:latest'
+            printf '%s\n' "- Source commit: $GITHUB_SHA"
+            printf '%s\n' "- CI run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } >> "$GITHUB_STEP_SUMMARY"

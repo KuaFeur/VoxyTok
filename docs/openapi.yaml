@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: VoxyTok API
-  version: 0.3.0
+  version: 1.0.0-rc.1
   description: >
     Self-hosted TikTok public-profile monitoring gateway. One deployment belongs to one consuming bot or application. Add creators by public username; no creator OAuth is required. Management routes use a bearer API token.
 servers:
@@ -147,6 +147,21 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Creator" }
         "422": { description: Invalid username }
+  /api/v1/creators/{id}/sources:
+    get:
+      summary: Inspect per-source monitoring state for a creator
+      description: Returns source health, cooldown and retry diagnostics. An empty array means no source has attempted this creator yet.
+      parameters:
+        - $ref: "#/components/parameters/UuidPath"
+      responses:
+        "200":
+          description: Source monitoring states
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CreatorSourceState" }
+        "404": { description: Creator not found }
   /api/v1/creators/{id}:
     delete:
       summary: Stop monitoring a creator and remove related event history
@@ -230,6 +245,27 @@ components:
         display_name: { type: [string, "null"] }
         enabled: { type: boolean }
         created_at: { type: string, format: date-time }
+        last_successful_poll_at: { type: [string, "null"], format: date-time }
+        next_poll_at: { type: [string, "null"], format: date-time }
+        poll_failures: { type: integer }
+        last_error: { type: [string, "null"] }
+    CreatorSourceState:
+      type: object
+      required: [source_key, status, consecutive_failures, total_failures, total_successes, updated_at]
+      properties:
+        source_key: { type: string }
+        status: { type: string }
+        last_attempt_at: { type: [string, "null"], format: date-time }
+        last_success_at: { type: [string, "null"], format: date-time }
+        next_attempt_at: { type: [string, "null"], format: date-time }
+        consecutive_failures: { type: integer }
+        total_failures: { type: integer, format: int64 }
+        total_successes: { type: integer, format: int64 }
+        last_latency_ms: { type: [integer, "null"] }
+        last_http_status: { type: [integer, "null"] }
+        last_error_code: { type: [string, "null"] }
+        last_error: { type: [string, "null"] }
+        updated_at: { type: string, format: date-time }
     IngestEvent:
       type: object
       required: [creator_id, platform_video_id, payload]

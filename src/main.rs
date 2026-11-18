@@ -1176,7 +1176,7 @@ async fn main() -> anyhow::Result<()> {
     let http=Client::builder()
         .timeout(Duration::from_secs(20))
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent("VoxyTok/0.3 (+https://github.com/KuaFeur/VoxyTok)")
+        .user_agent("VoxyTok/1.0.0-rc.1 (+https://github.com/KuaFeur/VoxyTok)")
         .build()?;
     let mut public_sources: Vec<sources::SourceAdapter> = Vec::new();
     public_sources.push(sources::SourceAdapter::TikTokPublicProfile(sources::TikTokPublicProfileSource::new(http.clone())));
