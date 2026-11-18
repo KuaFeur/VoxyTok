@@ -98,12 +98,14 @@ jobs:
       - name: Record immutable release image reference
         env:
           IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+        shell: bash
         run: |
+          set -euo pipefail
           test -n "$IMAGE_DIGEST"
           {
-            echo "### Published release image"
-            echo "- Immutable image: `$REGISTRY/$IMAGE_NAME@$IMAGE_DIGEST`"
-            echo "- Release tag: `$GITHUB_REF_NAME`"
-            echo "- Source commit: `$GITHUB_SHA`"
-            echo "- Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            printf '%s\n' '### Published release image'
+            printf '%s\n' "- Immutable image: $REGISTRY/$IMAGE_NAME@$IMAGE_DIGEST"
+            printf '%s\n' "- Release tag: $GITHUB_REF_NAME"
+            printf '%s\n' "- Source commit: $GITHUB_SHA"
+            printf '%s\n' "- Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           } >> "$GITHUB_STEP_SUMMARY"
