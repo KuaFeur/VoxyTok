@@ -33,25 +33,26 @@ pub enum SourceFailure {
     Malformed(String),
 }
 
+#[allow(async_fn_in_trait)]
 pub trait ProfileSource: Send + Sync {
     fn key(&self) -> &'static str;
     async fn fetch_profile(&self, username: &str) -> std::result::Result<PublicProfile, SourceFailure>;
 }
 
-pub struct TikTokEmbedSource {
+pub struct TikTokPublicProfileSource {
     client: Client,
 }
 
-impl TikTokEmbedSource {
+impl TikTokPublicProfileSource {
     pub fn new(client: Client) -> Self { Self { client } }
 
     fn parse(&self, username: &str, html: &str) -> Result<PublicProfile> {
         let marker = "id=\"__UNIVERSAL_DATA_FOR_REHYDRATION__\"";
-        let marker_pos = html.find(marker).ok_or_else(|| anyhow!("TikTok embed state script is missing"))?;
+        let marker_pos = html.find(marker).ok_or_else(|| anyhow!("TikTok public profile hydration script is missing"))?;
         let script_start = html[marker_pos..].find('>').map(|n| marker_pos + n + 1)
-            .ok_or_else(|| anyhow!("TikTok embed state script has no opening delimiter"))?;
+            .ok_or_else(|| anyhow!("TikTok public profile hydration script has no opening delimiter"))?;
         let script_end = html[script_start..].find("</script>").map(|n| script_start + n)
-            .ok_or_else(|| anyhow!("TikTok embed state script is not closed"))?;
+            .ok_or_else(|| anyhow!("TikTok public profile hydration script is not closed"))?;
         let state: Value = serde_json::from_str(html[script_start..script_end].trim())
             .context("TikTok embed state is not valid JSON")?;
         let user_info = find_value(&state, "userInfo")
@@ -88,8 +89,8 @@ impl TikTokEmbedSource {
     }
 }
 
-impl ProfileSource for TikTokEmbedSource {
-    fn key(&self) -> &'static str { "tiktok_embed" }
+impl ProfileSource for TikTokPublicProfileSource {
+    fn key(&self) -> &'static str { "tiktok_public_profile" }
 
     async fn fetch_profile(&self, username: &str) -> std::result::Result<PublicProfile, SourceFailure> {
         let handle = username.trim_start_matches('@');
@@ -112,7 +113,11 @@ impl ProfileSource for TikTokEmbedSource {
         }
         let html = response.text().await
             .map_err(|error| SourceFailure::TemporarilyUnavailable(error.to_string()))?;
-        if html.contains("_wafchallengeid") || html.to_ascii_lowercase().contains("captcha") && !html.contains("__UNIVERSAL_DATA_FOR_REHYDRATION__") {
+        let lower_html = html.to_ascii_lowercase();
+        if lower_html.contains("this account is private") || lower_html.contains("private account") {
+            return Err(SourceFailure::PrivateOrUnavailable);
+        }
+        if html.contains("_wafchallengeid") || (lower_html.contains("captcha") && !html.contains("__UNIVERSAL_DATA_FOR_REHYDRATION__")) {
             return Err(SourceFailure::Challenge);
         }
         self.parse(handle, &html).map_err(|error| SourceFailure::Malformed(error.to_string()))
@@ -221,9 +226,9 @@ fn attribute_value(xml: &str, tag: &str, attribute: &str) -> Option<String> {
     let start = xml.find(&open)?;
     let end = xml[start..].find('>')? + start;
     let header = &xml[start..end];
-    let marker = format!("{attribute}=\\\"");
+    let marker = format!("{attribute}=\"");
     let value_start = header.find(&marker)? + marker.len();
-    let value_end = header[value_start..].find('\\\"')? + value_start;
+    let value_end = header[value_start..].find('"')? + value_start;
     Some(header[value_start..value_end].replace("&amp;", "&"))
 }
 fn tag_value(xml: &str, name: &str) -> Option<String> {
@@ -248,7 +253,7 @@ mod tests {
     fn parses_tiktok_embedded_profile_state() {
         let html = r#"<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">{"source":{"data":{"/embed/@demo":{"userInfo":{"uniqueId":"demo","nickname":"Demo","avatarThumbUrl":"https://img"},"videoList":[{"id":"7350000000000000000","desc":"hello","coverUrl":"https://cover","createTime":1710000000}]}}}}</script>"#;
         let client = Client::builder().build().unwrap();
-        let source = TikTokEmbedSource::new(client);
+        let source = TikTokPublicProfileSource::new(client);
         let profile = source.parse("demo", html).unwrap();
         assert_eq!(profile.username, "demo");
         assert_eq!(profile.videos.len(), 1);
