@@ -204,8 +204,11 @@ pub async fn run(db: PgPool, sources: Vec<SourceAdapter>, poll_interval: Duratio
                 let mut tasks = JoinSet::new();
                 for creator in creators {
                     while tasks.len() >= 8 {
-                        if let Some(Err(error)) = tasks.join_next().await {
-                            tracing::error!(%error, "public profile polling task failed");
+                        match tasks.join_next().await {
+                            Some(Ok(Ok(()))) => {}
+                            Some(Ok(Err(error))) => tracing::error!(%error, "public profile polling failed"),
+                            Some(Err(error)) => tracing::error!(%error, "public profile polling task failed"),
+                            None => break,
                         }
                     }
                     let task_db = db.clone();
