@@ -101,6 +101,7 @@ fn should_emit(first_sync: bool, monitoring_started_at: Option<&DateTime<Utc>>, 
 async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfile, source_key: &str, poll_interval: Duration) -> anyhow::Result<usize> {
     let first_sync = creator.last_polled_at.is_none();
     let mut inserted = 0usize;
+    let mut tx = db.begin().await?;
     for video in profile.videos {
         let payload = json!({
             "event": "tiktok.video.published",
@@ -121,18 +122,19 @@ async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfil
                 "published_at": video.published_at.as_ref()
             }
         });
-        let mut tx = db.begin().await?;
         let video_id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO videos (id,creator_id,platform_video_id,payload,published_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (creator_id,platform_video_id) DO NOTHING RETURNING id"
         ).bind(Uuid::new_v4()).bind(creator.id).bind(&video.id).bind(&payload).bind(video.published_at)
             .fetch_optional(&mut *tx).await?;
-        if let Some(video_id) = video_id && should_emit(first_sync, creator.monitoring_started_at.as_ref(), video.published_at.as_ref()) {
-                sqlx::query("INSERT INTO deliveries (id,video_id) VALUES ($1,$2)")
-                    .bind(Uuid::new_v4()).bind(video_id).execute(&mut *tx).await?;
+        if let Some(video_id) = video_id
+            && should_emit(first_sync, creator.monitoring_started_at.as_ref(), video.published_at.as_ref())
+        {
+            sqlx::query("INSERT INTO deliveries (id,video_id) VALUES ($1,$2)")
+                .bind(Uuid::new_v4()).bind(video_id).execute(&mut *tx).await?;
             inserted += 1;
         }
-        tx.commit().await?;
     }
+    tx.commit().await?;
     let mut rng = OsRng;
     let jitter_seconds = (rng.next_u32() % 61) as i64;
     let next_poll_seconds = poll_interval.as_secs().max(60) as i64 + jitter_seconds;
@@ -143,7 +145,7 @@ async fn ingest_profile(db: &PgPool, creator: &DueCreator, profile: PublicProfil
 
 async fn poll_one(db: &PgPool, creator: DueCreator, sources: &[SourceAdapter], poll_interval: Duration) -> anyhow::Result<()> {
     let Some(creator) = sqlx::query_as::<_, DueCreator>(
-        "UPDATE creators SET poll_lease_until=NOW()+INTERVAL '2 minutes' WHERE id=$1 AND enabled=TRUE AND tiktok_open_id IS NULL AND next_poll_at<=NOW() AND (poll_lease_until IS NULL OR poll_lease_until<NOW()) RETURNING id,username,display_name,last_polled_at,monitoring_started_at,poll_failures"
+        "UPDATE creators SET poll_lease_until=NOW()+INTERVAL '2 minutes' WHERE id=$1 AND enabled=TRUE AND next_poll_at<=NOW() AND (poll_lease_until IS NULL OR poll_lease_until<NOW()) RETURNING id,username,display_name,last_polled_at,monitoring_started_at,poll_failures"
     ).bind(creator.id).fetch_optional(db).await? else { return Ok(()); };
     let mut last_error = None;
     let mut empty_feed_candidate: Option<(PublicProfile, String)> = None;
@@ -195,13 +197,13 @@ pub async fn run(db: PgPool, sources: Vec<SourceAdapter>, poll_interval: Duratio
     let sources = Arc::new(sources);
     loop {
         let due = sqlx::query_as::<_, DueCreator>(
-            "SELECT id,username,display_name,last_polled_at,monitoring_started_at,poll_failures FROM creators WHERE enabled=TRUE AND tiktok_open_id IS NULL AND next_poll_at<=NOW() AND (poll_lease_until IS NULL OR poll_lease_until<NOW()) ORDER BY next_poll_at,created_at LIMIT 10"
+            "SELECT id,username,display_name,last_polled_at,monitoring_started_at,poll_failures FROM creators WHERE enabled=TRUE AND next_poll_at<=NOW() AND (poll_lease_until IS NULL OR poll_lease_until<NOW()) ORDER BY next_poll_at,created_at LIMIT 32"
         ).fetch_all(&db).await;
         match due {
             Ok(creators) => {
                 let mut tasks = JoinSet::new();
                 for creator in creators {
-                    while tasks.len() >= 4 {
+                    while tasks.len() >= 8 {
                         if let Some(Err(error)) = tasks.join_next().await {
                             tracing::error!(%error, "public profile polling task failed");
                         }
@@ -222,7 +224,7 @@ pub async fn run(db: PgPool, sources: Vec<SourceAdapter>, poll_interval: Duratio
             }
             Err(error) => tracing::error!(%error, "could not load public profiles due for polling"),
         }
-        tokio::time::sleep(Duration::from_secs(15)).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
