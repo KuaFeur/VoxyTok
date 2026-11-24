@@ -1,13 +1,12 @@
 [package]
 name = "voxytok"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 edition = "2024"
 license = "Apache-2.0"
 description = "Self-hosted TikTok publication event gateway"
 repository = "https://github.com/KuaFeur/VoxyTok"
 
 [dependencies]
-aes-gcm = "0.10"
 rand = "0.8"
 anyhow = "1"
 axum = { version = "0.8", features = ["macros"] }

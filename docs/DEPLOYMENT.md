@@ -34,7 +34,6 @@ Import [the VoxyTok Egg](../deploy/pelican/egg-voxytok.json) or update the exist
 | `POSTGRES_PORT` | Keep `5432`; it is internal only and must not be publicly allocated. |
 | `PUBLIC_POLL_INTERVAL_SECONDS` | Default `300` (5 minutes); effective range 60–3600 seconds. |
 | `RSSHUB_BASE_URLS` | Keep the default HTTPS fallback list unless there is a tested reason to change it. |
-| Legacy TikTok OAuth variables | Leave all four at `unset` for username-only public-profile monitoring. If preserving legacy OAuth records, configure all four together and retain the original encryption key. |
 
 The container's persistent application data directory is `/home/container/data` (or the value of `VOXYTOK_DATA_DIR`). By default it contains the embedded PostgreSQL cluster. If `POSTGRES_DATA_DIR` is explicitly set, PostgreSQL stores its cluster at that path instead. Persist and back up the actual PostgreSQL directory in either case; when using the override, that means persisting and backing up both application data and the separate PostgreSQL path if they are different. These paths must survive image changes, restarts and server reinstalls. Never use a reinstall action that clears either path.
 
@@ -45,8 +44,8 @@ The application listens on `PORT` inside the container. Pelican's allocation and
 1. **Record the current state.** Note the current image reference/digest, Pelican variables (store secrets securely), allocation, volume mounts and Nginx upstream.
 2. **Back up before changing the image.** Stop VoxyTok in Pelican, then take a consistent snapshot/backup of the entire persistent application data directory and the actual PostgreSQL data directory (if separate). Keep backups outside those volumes. Do not copy a live PostgreSQL data directory and assume it is consistent.
 3. **Update only the container image.** Set the image to a verified digest. Do not reinstall the Egg, recreate the server, clear files or change the persistent mounts.
-4. **Keep configuration stable.** Preserve `API_TOKEN`, `POSTGRES_PASSWORD`, webhook settings, database name/user, `PORT` and any legacy OAuth values. Do not generate new secrets as part of a routine image upgrade.
-5. **Start the server.** The entrypoint starts the embedded PostgreSQL service, then the Rust process. On startup the app runs migrations, including migration 0007. Allow startup to finish before sending API traffic.
+4. **Keep configuration stable.** Preserve `API_TOKEN`, `POSTGRES_PASSWORD`, webhook settings, database name/user and `PORT`. RC2 removes OAuth credentials and drops the obsolete OAuth schema during migration. Do not generate new secrets as part of a routine image upgrade.
+5. **Start the server.** The entrypoint starts the embedded PostgreSQL service, then the Rust process. On startup the app runs migrations, including migration 0008, which removes OAuth-only database objects. Allow startup to finish before sending API traffic.
 6. **Check readiness from the host/reverse-proxy network.** Replace `<voxytok-instance-host>` with the hostname of the instance being deployed:
 
    ```bash

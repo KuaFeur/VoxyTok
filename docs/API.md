@@ -15,7 +15,7 @@ Keep this token on your application server. One VoxyTok instance belongs to one 
 - `GET /healthz`: process liveness.
 - `GET /readyz`: PostgreSQL readiness.
 
-Both return `public_monitor_configured` and `public_source_count`, showing whether public acquisition is enabled and how many retrieval paths are configured. The legacy `tiktok_provider_configured` field reports only the old OAuth provider and is not required for username-only monitoring.
+Both return `public_monitor_configured` and `public_source_count`, showing whether public acquisition is enabled and how many retrieval paths are configured.
 
 ## Creators
 
@@ -59,7 +59,7 @@ Returns the per-source monitoring state for a creator. Each entry includes the a
 
 ### `DELETE /api/v1/creators/{id}`
 
-Stops monitoring and deletes the creator, its source health state, video history and pending deliveries. Legacy OAuth-connected creators are still revoked through TikTok before deletion when their legacy credentials are configured.
+Stops monitoring and deletes the creator, its source health state, video history and pending deliveries. Creator deletion is local and removes the creator, its source health state, video history and pending deliveries.
 
 ## Events
 
@@ -145,7 +145,3 @@ The initial retrieval paths are:
 The scheduler applies source-specific cooldowns, honors `Retry-After`, backs off after failures and skips sources in cooldown. It never claims that any public source is unlimited or guaranteed. A TikTok challenge, profile privacy change or upstream outage can delay detection.
 
 Default polling interval is five minutes (configurable by the operator between 60 and 3600 seconds). This is best-effort polling, not a guaranteed real-time push feed.
-
-## Legacy OAuth routes
-
-The former `POST /api/v1/oauth/tiktok/start`, `GET /api/v1/oauth/tiktok/connections/{reference}` and `GET /oauth/tiktok/callback` routes remain temporarily for existing integrations and migration compatibility. They are not used by the public-profile workflow and will be removed in a later breaking release after migration.

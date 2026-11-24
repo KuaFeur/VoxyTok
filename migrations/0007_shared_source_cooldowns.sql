@@ -11,4 +11,4 @@ CREATE TABLE IF NOT EXISTS source_host_states (
 -- to their creation time so post-migration publications remain eligible.
 UPDATE creators
 SET monitoring_started_at = COALESCE(monitoring_started_at, created_at)
-WHERE enabled = TRUE AND tiktok_open_id IS NULL;
+WHERE enabled = TRUE;
