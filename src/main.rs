@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use sha2::Sha256;
 use sqlx::{postgres::PgPoolOptions, FromRow, PgPool};
 use std::{env, net::SocketAddr, time::Duration};
@@ -418,6 +418,7 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[tokio::test]
     async fn postgres_publication_outbox_is_idempotent() {
@@ -432,7 +433,18 @@ mod tests {
         sqlx::raw_sql(include_str!("../migrations/0004_worker_reliability.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0006_public_profile_sources.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0007_shared_source_cooldowns.sql")).execute(&db).await.unwrap();
+        // Simulate an RC1 database before applying the RC2 cleanup migration.
+        sqlx::raw_sql("ALTER TABLE creators ADD COLUMN IF NOT EXISTS tiktok_open_id TEXT UNIQUE, ADD COLUMN IF NOT EXISTS access_token_enc TEXT, ADD COLUMN IF NOT EXISTS refresh_token_enc TEXT, ADD COLUMN IF NOT EXISTS access_expires_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS refresh_expires_at TIMESTAMPTZ; CREATE TABLE IF NOT EXISTS oauth_states (state_hash TEXT PRIMARY KEY, expires_at TIMESTAMPTZ NOT NULL);")
+            .execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0008_remove_tiktok_oauth.sql")).execute(&db).await.unwrap();
+        let oauth_table_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='oauth_states')"
+        ).fetch_one(&db).await.unwrap();
+        assert!(!oauth_table_exists);
+        let oauth_column_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='creators' AND column_name IN ('tiktok_open_id','access_token_enc','refresh_token_enc','access_expires_at','refresh_expires_at')"
+        ).fetch_one(&db).await.unwrap();
+        assert_eq!(oauth_column_count, 0);
 
         let creator_id = Uuid::new_v4();
         let username = format!("ci_{}", Uuid::new_v4().simple());
