@@ -27,7 +27,7 @@ There is no honest way to promise that public TikTok endpoints or public RSSHub 
 
 Instead:
 
-- bounded global concurrency (four creator lookups at a time);
+- bounded global concurrency (eight creator lookups at a time);
 - configurable per-profile polling interval (five minutes by default; operator range 60-3600 seconds);
 - per-host source state and cooldowns;
 - respect `Retry-After` on HTTP 429;
@@ -58,11 +58,11 @@ The creator workflow is:
 { "username": "@creator" }
 ```
 
-The API normalizes the handle, creates or reuses the monitored profile and schedules discovery. OAuth endpoints remain only as temporary legacy compatibility routes; they are not used by this workflow.
+The API normalizes the handle, creates or reuses the monitored profile and schedules discovery. TikTok OAuth is not part of VoxyTok RC2: no OAuth endpoints, developer credentials, account linking or token storage remain.
 
 ## Deployment
 
-The Rust service and PostgreSQL remain in the existing Docker image and Pelican/Pterodactyl Egg. No Redis requirement is introduced. RSSHub fallback instances are configured by the operator default in the Egg; the consuming bot never talks to RSS directly.
+The Rust service and PostgreSQL remain in the existing Docker image and Pelican/Pterodactyl Egg. No Redis requirement is introduced. TikTok OAuth-only database objects are removed by migration 0008; earlier migration files remain in the repository to preserve upgrade ordering. RSSHub fallback instances are configured by the operator default in the Egg; the consuming bot never talks to RSS directly.
 
 ## Rollout requirements
 
