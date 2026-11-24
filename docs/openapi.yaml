@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: VoxyTok API
-  version: 1.0.0-rc.1
+  version: 1.0.0-rc.2
   description: >
     Self-hosted TikTok public-profile monitoring gateway. One deployment belongs to one consuming bot or application. Add creators by public username; no creator OAuth is required. Management routes use a bearer API token.
 servers:
