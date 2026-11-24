@@ -434,7 +434,7 @@ mod tests {
         sqlx::raw_sql(include_str!("../migrations/0006_public_profile_sources.sql")).execute(&db).await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0007_shared_source_cooldowns.sql")).execute(&db).await.unwrap();
         // Simulate an RC1 database before applying the RC2 cleanup migration.
-        sqlx::raw_sql("ALTER TABLE creators ADD COLUMN IF NOT EXISTS tiktok_open_id TEXT UNIQUE, ADD COLUMN IF NOT EXISTS access_token_enc TEXT, ADD COLUMN IF NOT EXISTS refresh_token_enc TEXT, ADD COLUMN IF NOT EXISTS access_expires_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS refresh_expires_at TIMESTAMPTZ; CREATE TABLE IF NOT EXISTS oauth_states (state_hash TEXT PRIMARY KEY, expires_at TIMESTAMPTZ NOT NULL); CREATE INDEX creators_due_poll_idx ON creators (next_poll_at,last_polled_at) WHERE enabled=TRUE AND tiktok_open_id IS NOT NULL;")
+        sqlx::raw_sql("ALTER TABLE creators ADD COLUMN IF NOT EXISTS tiktok_open_id TEXT UNIQUE, ADD COLUMN IF NOT EXISTS access_token_enc TEXT, ADD COLUMN IF NOT EXISTS refresh_token_enc TEXT, ADD COLUMN IF NOT EXISTS access_expires_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS refresh_expires_at TIMESTAMPTZ; CREATE TABLE IF NOT EXISTS oauth_states (state_hash TEXT PRIMARY KEY, expires_at TIMESTAMPTZ NOT NULL); DROP INDEX IF EXISTS creators_due_poll_idx; CREATE INDEX creators_due_poll_idx ON creators (next_poll_at,last_polled_at) WHERE enabled=TRUE AND tiktok_open_id IS NOT NULL;")
             .execute(&db).await.unwrap();
         // Re-run the updated worker migration as an RC1 upgrade would: it must
         // replace the old partial index before the OAuth identity column drops.
