@@ -100,6 +100,8 @@ jobs:
             sleep 2
           done
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/api/v1/creators)" = "401"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/oauth/tiktok/callback)" = "404"
+          curl --silent --fail http://127.0.0.1:8080/healthz | python3 -c 'import json,sys; data=json.load(sys.stdin); assert "tiktok_provider_configured" not in data'
           curl --silent --fail \
             -H "Authorization: Bearer ci_api_token_0123456789_abcdefghijklmnop" \
             http://127.0.0.1:8080/api/v1/creators | grep -q '^\[\]$'
